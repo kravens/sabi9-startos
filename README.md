@@ -1,4 +1,8 @@
-# Sabi9 · Wasabi Wallet for StartOS
+# Sabi9 · Wasabi Wallet for StartOS — ⚠️ ALPHA (pre-release)
+
+> **Alpha / pre-release.** Under active development and not yet audited or
+> submitted to the community registry. Test on a throwaway/regtest wallet or
+> small amounts only. Expect breaking changes.
 
 Wraps the headless **Wasabi Wallet daemon 2.8.0** for StartOS 0.4.0 and adds
 **Sabi9**, a web-native interface styled after Wasabi Desktop - the browser
