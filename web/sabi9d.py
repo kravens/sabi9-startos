@@ -404,6 +404,16 @@ def restore_wallet_file(name, obj):
         for k in ("Height", "BirthHeight"):
             v = bs.get(k)
             if isinstance(v, str) and v.isdigit(): bs[k] = int(v)
+        # The ⇓ export carries keys + labels but NOT the transaction store, so on a
+        # fresh node the history has to be rebuilt by re-scanning blocks. Wasabi only
+        # scans forward from BlockchainState.Height, so a file exported from a synced
+        # desktop (high Height) would show NO transactions. Reset Height down to the
+        # wallet's BirthHeight (or SegWit activation) to force a full rescan.
+        birth = bs.get("BirthHeight")
+        if not isinstance(birth, int) or birth <= 0:
+            birth = 481824 if str(network).lower() == "main" else 0
+        bs["BirthHeight"] = birth
+        bs["Height"] = birth
     # a watch-only wallet has no key chain -> coinjoin throws an UNHANDLED
     # exception that SIGABRTs the whole daemon. Force AutoCoinJoin off so a
     # restored watch-only wallet can never auto-start a round on load.

@@ -78,6 +78,11 @@ network - the server gets a **watch-only** wallet (◇ badge) that tracks
 balances and generates receive addresses but holds no keys and cannot spend.
 Signing stays on the hardware device.
 
+Importing or restoring a wallet file rebuilds its **transaction history by
+rescanning the chain** (the file holds keys and labels, not the transaction
+store), so balances and history appear only after the block-filter sync
+finishes - the loading screen shows the countdown.
+
 ## Optional: Bitcoin Core backend
 
 If Bitcoin Core runs on this node, **Settings ⚙ → Bitcoin Core RPC** can point
