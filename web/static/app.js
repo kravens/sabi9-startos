@@ -53,6 +53,17 @@ const target = () => (S.info && S.info.anonScoreTarget) || 5;
 const isCj = (h) => !!(h.islikelycoinjoin || h.isLikelyCoinJoin ||
                        String(h.label || "").toLowerCase() === "coinjoin");
 
+// daemon errors -> human explanations (the raw ones confuse: "There is no wallet
+// loaded" really means the async load / filter matching hasn't finished yet)
+function friendly(e) {
+  const m = String((e && e.message) || e);
+  if (/no wallet loaded/i.test(m))
+    return "wallet is still loading - the daemon is matching block filters; try again in a moment";
+  if (/no coordinator/i.test(m))
+    return "no coinjoin coordinator configured - choose one in Settings ⚙";
+  return m;
+}
+
 function toast(msg, err = false, ms = 3500) {
   const t = $("toast");
   t.textContent = msg; t.className = err ? "err" : ""; t.classList.remove("hidden");
@@ -127,6 +138,13 @@ function render() {
   const wo = !!(S.info && S.info.isWatchOnly);
   $("walletTitle").innerHTML = esc(S.wallet) +
     (wo ? ' <span class="wobadge">◇ watch-only</span>' : "");
+
+  // while the wallet is loading the daemon rejects wallet RPCs ("There is no
+  // wallet loaded") - grey the actions out instead of letting them fail raw
+  $("btnSend").disabled = S.loading;
+  $("btnReceive").disabled = S.loading;
+  $("mbToggle").disabled = S.loading;
+  $("mbStop").disabled = S.loading;
 
   const note = $("syncNote");
   const fleft = Number(st.filtersLeft || 0);
@@ -341,7 +359,7 @@ function showImportWallet() {
       });
       await activateWallet(r.name, "");     // watch-only: empty password
       toast(`◇ '${r.name}' imported - watch-only, syncing …`);
-    } catch (e) { toast("✗ " + e.message, true, 7000); $("iwGo").disabled = false; }
+    } catch (e) { toast("✗ " + friendly(e), true, 7000); $("iwGo").disabled = false; }
   };
 }
 
@@ -370,7 +388,7 @@ function showCreateWallet() {
       const mn = await rpc("createwallet", [name, pw]);
       const words = typeof mn === "string" ? mn : (mn && (mn.mnemonic || mn.recoveryWords)) || String(mn);
       showMnemonic(name, words, pw);
-    } catch (e) { toast("✗ " + e.message, true, 6000); $("cwGo").disabled = false; }
+    } catch (e) { toast("✗ " + friendly(e), true, 6000); $("cwGo").disabled = false; }
   };
 }
 
@@ -430,7 +448,7 @@ function showRecoverWallet() {
       await rpc("recoverwallet", [name, mn, pw]);
       await activateWallet(name, pw);
       toast(`wallet '${name}' recovered — syncing …`);
-    } catch (e) { toast("✗ " + e.message, true, 6000); $("rwGo").disabled = false; }
+    } catch (e) { toast("✗ " + friendly(e), true, 6000); $("rwGo").disabled = false; }
   };
 }
 
@@ -578,7 +596,7 @@ function showPreview(p) {
         const r = await rpc("send", { payments: pays, coins, feeTarget: 6, password: pw }, S.wallet);
         closeDialog(); toast("sent ✓  txid " + String((r && r.txid) || "").slice(0, 16) + "…");
         poll();
-      } catch (e) { toast("✗ " + e.message, true, 6000); $("pvConfirm").disabled = false; }
+      } catch (e) { toast("✗ " + friendly(e), true, 6000); $("pvConfirm").disabled = false; }
     };
   };
   draw();
@@ -611,7 +629,7 @@ function showReceive() {
           </div>
         </div>`);
       $("rvAddr").onclick = () => { navigator.clipboard.writeText(addr); toast("address copied ✓"); };
-    } catch (e) { toast("✗ " + e.message, true); }
+    } catch (e) { toast("✗ " + friendly(e), true); }
   };
 }
 
@@ -673,17 +691,17 @@ async function showCoinjoin() {
     const auto = document.querySelector('input[name="cjMode"]:checked').value === "auto";
     try { await rpc("startcoinjoin", [$("cjPw").value, auto, true], S.wallet);
           closeDialog(); toast("coinjoin started ◆"); poll(); }
-    catch (e) { toast("✗ " + e.message, true, 6000); }
+    catch (e) { toast("✗ " + friendly(e), true, 6000); }
   };
   $("cjStop").onclick = async () => {
     try { await rpc("stopcoinjoin", [], S.wallet); closeDialog(); toast("coinjoin stopped"); poll(); }
-    catch (e) { toast("✗ " + e.message, true); }
+    catch (e) { toast("✗ " + friendly(e), true); }
   };
   if ($("cjSweep")) $("cjSweep").onclick = async () => {
     const outw = $("cjOutW").value;
     try { await rpc("startcoinjoinsweep", [$("cjPw").value, outw], S.wallet);
           closeDialog(); toast(`sweep started - coins will land in ${outw} ◆`); poll(); }
-    catch (e) { toast("✗ " + e.message, true, 6000); }
+    catch (e) { toast("✗ " + friendly(e), true, 6000); }
   };
   $("cjPayGo").onclick = async () => {
     const addr = $("cjPayAddr").value.trim();
@@ -692,13 +710,13 @@ async function showCoinjoin() {
       return toast("that doesn't look like a bitcoin address", true);
     if (!amt || amt <= 0) return toast("enter a positive amount", true);
     try { await rpc("payincoinjoin", [addr, amt], S.wallet); toast("payment queued ◆"); showCoinjoin(); }
-    catch (e) { toast("✗ " + e.message, true, 6000); }
+    catch (e) { toast("✗ " + friendly(e), true, 6000); }
   };
   document.querySelectorAll(".payrow .px").forEach((x) => {
     x.onclick = async () => {
       try { await rpc("cancelpaymentincoinjoin", [x.dataset.id], S.wallet);
             toast("payment cancelled"); showCoinjoin(); }
-      catch (e) { toast("✗ " + e.message, true); }
+      catch (e) { toast("✗ " + friendly(e), true); }
     };
   });
 }
@@ -726,7 +744,7 @@ function showTxFix(kind, tid) {
       closeDialog();
       toast((speed ? "fee bumped ✓ " : "cancelled ✓ ") + String(nt).slice(0, 16) + "…");
       poll();
-    } catch (e) { toast("✗ " + e.message, true, 6000); $("tfGo").disabled = false; }
+    } catch (e) { toast("✗ " + friendly(e), true, 6000); $("tfGo").disabled = false; }
   };
 }
 
@@ -741,7 +759,7 @@ function coordHost(url) {
 
 async function showSettings() {
   let s;
-  try { s = await api("/settings"); } catch (e) { return toast("✗ " + e.message, true); }
+  try { s = await api("/settings"); } catch (e) { return toast("✗ " + friendly(e), true); }
   openDialog(`
     <h2><span class="back" onclick="closeDialog()">←</span> Settings</h2>
     <div class="improve">COINJOIN COORDINATOR</div>
@@ -809,7 +827,7 @@ async function showSettings() {
         <span>Saved to Config.json. <b>Restart the Sabi9 service</b> (StartOS → Sabi9 → Restart) -
         the daemon only reads its config at startup.</span></div>`;
       $("stSave").disabled = false;
-    } catch (e) { toast("✗ " + e.message, true, 6000); $("stSave").disabled = false; }
+    } catch (e) { toast("✗ " + friendly(e), true, 6000); $("stSave").disabled = false; }
   };
 }
 
@@ -850,13 +868,13 @@ $("navDiscreet").onclick = () => {
 $("mbToggle").onclick = async () => {
   if (S.cjOn) {
     try { await rpc("stopcoinjoin", [], S.wallet); toast("coinjoin paused"); poll(); }
-    catch (e) { toast("✗ " + e.message, true); }
+    catch (e) { toast("✗ " + friendly(e), true); }
     return;
   }
   try {
     await rpc("startcoinjoin", [pwOf(), true, true], S.wallet);
     toast("coinjoin started ◆  mixing until everything is private"); poll();
-  } catch (e) { showCoinjoin(); toast("✗ " + e.message, true, 5000); }
+  } catch (e) { showCoinjoin(); toast("✗ " + friendly(e), true, 5000); }
 };
 $("mbStop").onclick = () => rpc("stopcoinjoin", [], S.wallet).then(() => { toast("coinjoin stopped"); poll(); });
 $("mbMore").onclick = () => showCoinjoin();
