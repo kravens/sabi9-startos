@@ -5,6 +5,22 @@ import { uiPort, rpcPort } from './utils'
 export const main = sdk.setupMain(async ({ effects }) => {
   console.info(i18n('Starting Sabi9 (Wasabi daemon + web UI)'))
 
+  // restart bridge: the web UI (Settings save / wallet import) can request a FULL
+  // service restart - identical to Dashboard → Restart. Subcontainers can't call
+  // StartOS, so sabi9d raises a read-once flag on /restart-pending and this
+  // runtime watcher (same loopback as the subcontainers) calls effects.restart().
+  const restartWatcher = setInterval(async () => {
+    try {
+      const res = await fetch(`http://127.0.0.1:${uiPort}/restart-pending`)
+      const j = (await res.json()) as { restart?: boolean }
+      if (j.restart) {
+        clearInterval(restartWatcher)
+        console.info(i18n('Web UI requested a full service restart'))
+        await effects.restart()
+      }
+    } catch (e) {} // web daemon not up (yet): nothing to do
+  }, 4000)
+
   const mkMounts = () =>
     sdk.Mounts.of().mountVolume({
       volumeId: 'main',

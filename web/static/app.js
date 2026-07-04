@@ -398,17 +398,17 @@ function showImportRestart(name) {
     <div class="wchip good"><span class="wi">✓</span><span>The wallet file is on the server.
       The Wasabi daemon only scans its wallet folder <b>at startup</b>, so it needs one
       restart to see '${esc(name)}'.</span></div>
-    <p class="setp">Restart now (the coinjoin/music box pauses for a minute while the daemon
-      reboots and re-syncs), or later via StartOS → Sabi9 → Restart. Afterwards
+    <p class="setp">Restart now - a <b>full service restart</b>, exactly like StartOS → Sabi9 →
+      Restart: the app disconnects for a minute while everything reboots. Afterwards
       '${esc(name)}' appears in the sidebar.</p>
     <div class="drow"><button class="abtn" onclick="closeDialog()">Later</button>
-      <button class="abtn primary" id="irGo">Restart the daemon now</button></div>`);
+      <button class="abtn primary" id="irGo">Restart the service now</button></div>`);
   $("irGo").onclick = async () => {
     try {
       $("irGo").disabled = true;
       await api("/restart-daemon");
       closeDialog();
-      toast("daemon restarting - '" + name + "' will be in the sidebar in a minute ⟳", false, 8000);
+      toast("service restarting ⟳ - '" + name + "' appears in the sidebar when the app reconnects", false, 8000);
     } catch (e) { toast("✗ " + friendly(e), true, 7000); $("irGo").disabled = false; }
   };
 }
@@ -953,15 +953,15 @@ async function showSettings(tab = "coordinator") {
         await api("/wallet-settings", { name: S.wallet,
                                         anonScoreTarget: $("stAnon").value.trim() });
       $("stSaved").innerHTML = `<div class="wchip good"><span class="wi">✓</span>
-        <span>Saved to Config.json - the daemon only reads it at startup.</span>
-        <button class="abtn" id="stRestart" style="margin-left:auto;flex:0 0 auto">⟳ Restart now</button></div>`;
+        <span>Saved - settings apply on the next service restart.</span>
+        <button class="abtn" id="stRestart" style="margin-left:auto;flex:0 0 auto">⟳ Restart service</button></div>`;
       $("stSave").disabled = false;
       $("stRestart").onclick = async () => {
         try {
           $("stRestart").disabled = true;
           await api("/restart-daemon");
           closeDialog();
-          toast("daemon restarting with the new settings - back in a minute ⟳", false, 8000);
+          toast("service restarting with the new settings ⟳ - the app reconnects shortly", false, 8000);
         } catch (e) { toast("✗ " + friendly(e), true, 6000); $("stRestart").disabled = false; }
       };
     } catch (e) { toast("✗ " + friendly(e), true, 6000); $("stSave").disabled = false; }

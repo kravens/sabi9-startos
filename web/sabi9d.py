@@ -245,6 +245,7 @@ def validate_settings(req, cfg):
     if not upd: raise ValueError("nothing to save")
     return upd
 
+_restart_flag = {}                                # web UI -> TS runtime restart bridge
 _coord_cache = {"t": 0.0, "live": []}
 def live_coordinators(days=14, n=100, timeout=8):
     # coordinators with recent PUBLIC rounds (best effort, cached 10 min). Carries no
@@ -469,6 +470,10 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         if path == "/health":
             return self._send(200, {"ok": True})
+        if path == "/restart-pending":
+            # read-once: consumed by the TS runtime's watcher (see main.ts)
+            pending = _restart_flag.pop("pending", False)
+            return self._send(200, {"restart": bool(pending)})
         if path == "/settings":
             cfg = read_wasabi_config()
             return self._send(200, {
@@ -545,18 +550,13 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self._send(502, {"error": str(e) or type(e).__name__})
         if path == "/restart-daemon":
-            # wassabeed only scans Wallets/ at startup, so a skeleton import needs a
-            # daemon restart. RPC 'stop' exits the process; the StartOS supervisor
-            # relaunches it. The daemon may die before answering - that's success too.
-            try:
-                rpc_call("stop", [], timeout=10)
-                return self._send(200, {"ok": True})
-            except Exception as e:
-                msg = str(e)
-                if any(s in msg for s in ("Connection reset", "Remote end closed",
-                                          "Connection refused", "timed out", "EOF")):
-                    return self._send(200, {"ok": True, "note": "daemon exited mid-reply"})
-                return self._send(502, {"error": msg or type(e).__name__})
+            # requests a FULL service restart - identical to StartOS Dashboard →
+            # Restart. We can't call StartOS from a subcontainer; instead the
+            # package's TS runtime polls /restart-pending (shared loopback) and
+            # calls effects.restart(). (The earlier RPC-'stop' approach only
+            # killed wassabeed and did not reliably bring the service back.)
+            _restart_flag["pending"] = True
+            return self._send(200, {"ok": True})
         if path == "/import-skeleton":
             try:
                 ln = int(self.headers.get("Content-Length") or 0)

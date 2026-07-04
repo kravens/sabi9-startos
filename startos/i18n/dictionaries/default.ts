@@ -13,6 +13,9 @@ const dict = {
   // interfaces.ts
   'Sabi9 Web Interface': 7,
   'Wasabi-style wallet interface: balances, coinjoin, privacy-first sending': 8,
+
+  // main.ts restart bridge
+  'Web UI requested a full service restart': 9,
 } as const
 
 /**
