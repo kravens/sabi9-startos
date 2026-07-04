@@ -80,7 +80,7 @@ async function poll() {
     if (S.wallet) {
       try {
         S.info = await rpc("getwalletinfo", [], S.wallet);
-        S.noCoord = false;
+        S.noCoord = false; S.walletMissing = false;
         if (S.info && S.info.loaded === false) {
           S.loading = true; S.coins = []; S.history = [];
         } else {
@@ -102,6 +102,7 @@ async function poll() {
         const m = String(e.message || e).toLowerCase();
         if (m.includes("no coordinator")) { S.noCoord = true; S.loading = false; }
         else if (m.includes("no wallet loaded")) { S.loading = true; }
+        else if (m.includes("not found")) { S.walletMissing = true; S.loading = false; }
         else throw e;
       }
     }
@@ -141,14 +142,19 @@ function render() {
 
   // while the wallet is loading the daemon rejects wallet RPCs ("There is no
   // wallet loaded") - grey the actions out instead of letting them fail raw
-  $("btnSend").disabled = S.loading;
-  $("btnReceive").disabled = S.loading;
-  $("mbToggle").disabled = S.loading;
-  $("mbStop").disabled = S.loading;
+  const busy = S.loading || S.walletMissing;
+  $("btnSend").disabled = busy;
+  $("btnReceive").disabled = busy;
+  $("mbToggle").disabled = busy;
+  $("mbStop").disabled = busy;
 
   const note = $("syncNote");
   const fleft = Number(st.filtersLeft || 0);
-  if (S.noCoord) {
+  if (S.walletMissing) {
+    note.classList.remove("hidden");
+    note.textContent = `⚠ wallet '${S.wallet}' is not on the daemon (yet) - a freshly ` +
+      "imported wallet appears after a service restart. Or pick another wallet in the sidebar.";
+  } else if (S.noCoord) {
     note.classList.remove("hidden");
     note.innerHTML = "⚠ No coinjoin coordinator configured - coinjoin is disabled. " +
       '<a id="fixCoord">Choose one in Settings →</a>';
@@ -357,9 +363,38 @@ function showImportWallet() {
       const r = await api("/import-skeleton", {
         name, skeleton: $("iwText").value, masterFingerprint: $("iwFp").value.trim(),
       });
-      await activateWallet(r.name, "");     // watch-only: empty password
-      toast(`◇ '${r.name}' imported - watch-only, syncing …`);
+      // the daemon only scans Wallets/ at startup - probe before activating
+      try {
+        await rpc("loadwallet", [r.name]);
+        await activateWallet(r.name, "");   // watch-only: empty password
+        toast(`◇ '${r.name}' imported - watch-only, syncing …`);
+      } catch (e) {
+        if (/not found/i.test(String(e.message || e))) showImportRestart(r.name);
+        else throw e;
+      }
     } catch (e) { toast("✗ " + friendly(e), true, 7000); $("iwGo").disabled = false; }
+  };
+}
+
+// wallet file written, but the running daemon doesn't know it yet
+function showImportRestart(name) {
+  openDialog(`
+    <h2>◇ '${esc(name)}' imported</h2>
+    <div class="wchip good"><span class="wi">✓</span><span>The wallet file is on the server.
+      The Wasabi daemon only scans its wallet folder <b>at startup</b>, so it needs one
+      restart to see '${esc(name)}'.</span></div>
+    <p class="setp">Restart now (the coinjoin/music box pauses for a minute while the daemon
+      reboots and re-syncs), or later via StartOS → Sabi9 → Restart. Afterwards
+      '${esc(name)}' appears in the sidebar.</p>
+    <div class="drow"><button class="abtn" onclick="closeDialog()">Later</button>
+      <button class="abtn primary" id="irGo">Restart the daemon now</button></div>`);
+  $("irGo").onclick = async () => {
+    try {
+      $("irGo").disabled = true;
+      await api("/restart-daemon");
+      closeDialog();
+      toast("daemon restarting - '" + name + "' will be in the sidebar in a minute ⟳", false, 8000);
+    } catch (e) { toast("✗ " + friendly(e), true, 7000); $("irGo").disabled = false; }
   };
 }
 
@@ -1032,6 +1067,7 @@ function demoApi(path, body) {
     live: [["https://coinjoin.kruw.io/", 1243], ["https://wasabist.example/", 87]],
   });
   if (path === "/detect-bitcoind") return Promise.resolve({ found: ["bitcoind.embassy:8332"] });
+  if (path === "/restart-daemon") return Promise.resolve({ ok: true });
   if (path === "/import-skeleton") {
     if (!/xpub|zpub|ExtPubKey/.test(String(body.skeleton))) return Promise.reject(new Error("demo: no key found"));
     DEMO_WALLETS.push(body.name); DEMO_WATCHONLY.add(body.name);

@@ -474,6 +474,19 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
+        if path == "/restart-daemon":
+            # wassabeed only scans Wallets/ at startup, so a skeleton import needs a
+            # daemon restart. RPC 'stop' exits the process; the StartOS supervisor
+            # relaunches it. The daemon may die before answering - that's success too.
+            try:
+                rpc_call("stop", [], timeout=10)
+                return self._send(200, {"ok": True})
+            except Exception as e:
+                msg = str(e)
+                if any(s in msg for s in ("Connection reset", "Remote end closed",
+                                          "Connection refused", "timed out", "EOF")):
+                    return self._send(200, {"ok": True, "note": "daemon exited mid-reply"})
+                return self._send(502, {"error": msg or type(e).__name__})
         if path == "/import-skeleton":
             try:
                 ln = int(self.headers.get("Content-Length") or 0)
