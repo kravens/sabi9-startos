@@ -1,9 +1,10 @@
 name: Tag and Release
 
+# Manual only: run from Actions → Tag and Release → Run workflow when you want
+# to tag + publish a release. (Was push-to-master, but that fails on every
+# commit until the registry/S3 secrets are configured - see README.)
 on:
-  push:
-    branches: ["master"]
-    paths-ignore: ["*.md"]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
