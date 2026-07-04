@@ -3,3 +3,5 @@ dist/
 *.s9pk
 javascript/
 .DS_Store
+__pycache__/
+*.pyc
