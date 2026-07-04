@@ -71,6 +71,14 @@ for bumping the version.
   needed.
 - `startos/` - StartOS 0.4.0 SDK wiring (manifest, main, interfaces, versions).
 
+## ⚠ Uninstalling deletes your wallets
+
+StartOS removes a service's data volume on uninstall: every wallet file on the
+daemon goes with it. Updates and reinstalls over an existing install keep the
+data. Before uninstalling, make a **StartOS backup** (includes all wallets,
+labels and anonymity metadata) or use the UI's **⇓ wallet-file download**.
+Recovery words + password restore funds but not labels/privacy metadata.
+
 ## Security model
 
 The web UI is only reachable through the interfaces StartOS exposes (LAN
