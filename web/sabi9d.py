@@ -352,25 +352,22 @@ def import_skeleton(name, xpub, fp):
     if os.path.exists(path): raise ValueError(f"wallet '{name}' already exists")
     network = read_wasabi_config().get("Network", "Main")
     testnet = str(network).lower() != "main"
-    wallet = {                                     # 2.8.0 watch-only KeyManager shape
-        "EncryptedSecret": None,
+    # matches 2.8.0's KeyManager JSON decoder EXACTLY (Decode.Object in KeyManager.cs):
+    # required = ExtPubKey, BlockchainState, HdPubKeys; heights are JSON NUMBERS
+    # (unlike the RPC's string heights!) - a string Height fails the UInt decode and
+    # the daemon silently skips the "corrupted" wallet file at startup.
+    birth = 0 if testnet else 481824               # SegWit activation: no P2WPKH predates it
+    wallet = {
+        "EncryptedSecret": None,                   # null + fingerprint = hardware watch-only
         "ChainCode": None,
         "MasterFingerprint": fp,
         "ExtPubKey": xpub,
-        "SkipSynchronization": False,
         "MinGapLimit": 21,
         "AccountKeyPath": "84'/1'/0'" if testnet else "84'/0'/0'",
         "TaprootAccountKeyPath": "86'/1'/0'" if testnet else "86'/0'/0'",
-        # SegWit activation height: no P2WPKH history can predate it
-        "BlockchainState": {"Network": network, "Height": "481824" if not testnet else "0"},
+        "BlockchainState": {"Network": network, "Height": birth, "BirthHeight": birth},
         "PreferPsbtWorkflow": True,
-        "AutoCoinJoin": False,
-        "PlebStopThreshold": "0.01",
         "Icon": None,
-        "AnonScoreTarget": 5,
-        "FeeRateMedianTimeFrame": 0,
-        "IsCoinjoinProfileSelected": False,
-        "RedCoinIsolation": False,
         "ExcludedCoinsFromCoinJoin": [],
         "HdPubKeys": [],
     }
