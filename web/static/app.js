@@ -974,6 +974,7 @@ $("btnExport").onclick = () => {
 };
 $("wCreate").onclick = showCreateWallet;
 $("wRecover").onclick = showRecoverWallet;
+$("wImport").onclick = showImportWallet;
 $("navSettings").onclick = showSettings;
 $("search").addEventListener("focus", () => { $("search").blur(); showSettings(); });
 $("navRefresh").onclick = () => { toast("refreshing ..."); poll(); };
