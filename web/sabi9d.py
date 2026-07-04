@@ -203,11 +203,6 @@ def validate_settings(req, cfg):
         uri = norm_coord_uri(str(req["coordinatorUri"] or ""))
         if uri is None: raise ValueError("invalid coordinator URI")
         upd["CoordinatorUri"] = uri
-    if "coordinatorIdentifier" in req:
-        v = str(req["coordinatorIdentifier"] or "").strip()
-        if not re.fullmatch(r"[A-Za-z0-9._\-]{1,100}", v):
-            raise ValueError("coordinator identifier: letters, digits, . _ - (max 100)")
-        upd["CoordinatorIdentifier"] = v
     if "maxCoinJoinMiningFeeRate" in req:
         try: v = float(req["maxCoinJoinMiningFeeRate"])
         except (TypeError, ValueError): raise ValueError("max mining fee rate must be a number")
@@ -448,7 +443,6 @@ class Handler(BaseHTTPRequestHandler):
             cfg = read_wasabi_config()
             return self._send(200, {
                 "coordinatorUri": cfg.get("CoordinatorUri", ""),
-                "coordinatorIdentifier": cfg.get("CoordinatorIdentifier", "CoinJoinCoordinatorIdentifier"),
                 "maxCoinJoinMiningFeeRate": cfg.get("MaxCoinJoinMiningFeeRate", 50),
                 "absoluteMinInputCount": cfg.get("AbsoluteMinInputCount", 21),
                 "bitcoinRpcEndPoint": cfg.get("BitcoinRpcEndPoint", ""),

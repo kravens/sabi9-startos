@@ -863,8 +863,6 @@ async function showSettings(tab = "coordinator") {
         <div class="frow"><label>MIN INPUT COUNT - refuse smaller rounds (default 21)</label>
           <input id="stMinIn" value="${esc(String(s.absoluteMinInputCount))}" spellcheck="false"></div>
       </div>
-      <div class="frow"><label>COORDINATOR IDENTIFIER · advanced - leave as-is unless yours says otherwise</label>
-        <input id="stCoordId" value="${esc(String(s.coordinatorIdentifier))}" spellcheck="false"></div>
     </div>
 
     <div id="st-privacy" class="stsec hidden">
@@ -927,7 +925,6 @@ async function showSettings(tab = "coordinator") {
   $("stSave").onclick = async () => {
     const body = {
       coordinatorUri: $("stCoord").value.trim(),
-      coordinatorIdentifier: $("stCoordId").value.trim(),
       maxCoinJoinMiningFeeRate: $("stMaxFee").value.trim(),
       absoluteMinInputCount: $("stMinIn").value.trim(),
       bitcoinRpcEndPoint: $("stRpcEp").value.trim(),
@@ -944,9 +941,17 @@ async function showSettings(tab = "coordinator") {
       $("stSave").disabled = true;
       await api("/settings", body);
       $("stSaved").innerHTML = `<div class="wchip good"><span class="wi">✓</span>
-        <span>Saved to Config.json. <b>Restart the Sabi9 service</b> (StartOS → Sabi9 → Restart) -
-        the daemon only reads its config at startup.</span></div>`;
+        <span>Saved to Config.json - the daemon only reads it at startup.</span>
+        <button class="abtn" id="stRestart" style="margin-left:auto;flex:0 0 auto">⟳ Restart now</button></div>`;
       $("stSave").disabled = false;
+      $("stRestart").onclick = async () => {
+        try {
+          $("stRestart").disabled = true;
+          await api("/restart-daemon");
+          closeDialog();
+          toast("daemon restarting with the new settings - back in a minute ⟳", false, 8000);
+        } catch (e) { toast("✗ " + friendly(e), true, 6000); $("stRestart").disabled = false; }
+      };
     } catch (e) { toast("✗ " + friendly(e), true, 6000); $("stSave").disabled = false; }
   };
 }
