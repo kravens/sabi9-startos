@@ -74,6 +74,16 @@
         title="Download this wallet's file - the full backup incl. labels and privacy metadata">⇓</button>
     </div>
 
+    <div id="walletLoading" class="hidden">
+      <svg class="wlogo" viewBox="0 0 75 57"><use href="#wasabiW-use"/></svg>
+      <h3 id="wlTitle">Opening wallet…</h3>
+      <p id="wlMsg">The daemon is matching block filters and downloading matched blocks
+        over P2P. Balances and transactions appear once it finishes.</p>
+      <div id="wlBar"><div id="wlFill"></div></div>
+      <p id="wlDetail" class="setp"></p>
+    </div>
+
+    <div id="dashBody">
     <section id="cards">
       <div class="card">
         <h4>BALANCE</h4>
@@ -101,6 +111,7 @@
 
     <div id="txhead"><h3>Transactions</h3><span class="cnt" id="txCount"></span></div>
     <table id="txs"><tbody id="txBody"></tbody></table>
+    </div><!-- /dashBody -->
     </div><!-- /dashboard -->
   </main>
 </div>

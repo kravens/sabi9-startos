@@ -204,6 +204,23 @@ table#txs { width: 100%; border-collapse: collapse; }
 .wnote b { color: var(--dim); }
 #emptyState { text-align: center; padding-top: 18vh; color: var(--dim); font-size: 14px; }
 
+/* wallet loading (opening / not yet fully synced) */
+#walletLoading { max-width: 520px; margin: 8vh auto 0; text-align: center; }
+#walletLoading .wlogo { width: 52px; height: 44px; fill: var(--green); animation: breathe 2.4s ease-in-out infinite; }
+#walletLoading h3 { font-size: 20px; font-weight: 600; margin: 16px 0 8px; }
+#walletLoading p { color: var(--dim); font-size: 13.5px; line-height: 1.6; }
+#wlBar {
+  height: 6px; background: #262626; border-radius: 4px; overflow: hidden; margin: 20px 0 10px;
+  position: relative;
+}
+#wlFill { height: 100%; background: linear-gradient(90deg, var(--green-dim), var(--green)); transition: width .6s; }
+#wlBar.indeterminate #wlFill {
+  width: 35%; position: absolute; border-radius: 4px;
+  animation: wlSlide 1.5s ease-in-out infinite;
+}
+@keyframes wlSlide { 0% { left: -35%; } 100% { left: 100%; } }
+#wlDetail { font-family: var(--mono); font-size: 12px; margin-top: 4px; }
+
 /* ---- dialogs -------------------------------------------------------------------- */
 #overlay {
   position: fixed; inset: 0; background: #000a; display: flex; align-items: center;

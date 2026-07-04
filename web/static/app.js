@@ -81,7 +81,11 @@ async function poll() {
       try {
         S.info = await rpc("getwalletinfo", [], S.wallet);
         S.noCoord = false; S.walletMissing = false;
-        if (S.info && S.info.loaded === false) {
+        // getwalletinfo.loaded is true ONLY after full sync; while syncing it is
+        // false and gethistory/listunspentcoins throw "no wallet loaded". Treat
+        // anything but an explicit true as loading, so a syncing wallet never
+        // renders as a loaded-but-empty one.
+        if (!S.info || S.info.loaded !== true) {
           S.loading = true; S.coins = []; S.history = [];
         } else {
           S.loading = false;
@@ -140,29 +144,43 @@ function render() {
   $("walletTitle").innerHTML = esc(S.wallet) +
     (wo ? ' <span class="wobadge">◇ watch-only</span>' : "");
 
-  // while the wallet is loading the daemon rejects wallet RPCs ("There is no
-  // wallet loaded") - grey the actions out instead of letting them fail raw
-  const busy = S.loading || S.walletMissing;
-  $("btnSend").disabled = busy;
-  $("btnReceive").disabled = busy;
-  $("mbToggle").disabled = busy;
-  $("mbStop").disabled = busy;
+  // loading / not-on-daemon -> full-panel state, NOT a fake-empty dashboard.
+  // (getwalletinfo.loaded is only true after full sync; until then coins/history
+  // throw, so an empty dashboard would wrongly read as "empty wallet".)
+  const blocked = S.loading || S.walletMissing;
+  $("btnSend").disabled = blocked;
+  $("btnReceive").disabled = blocked;
+  $("btnExport").disabled = S.walletMissing;   // file exists while syncing
+  show("walletLoading", blocked);
+  show("dashBody", !blocked);
+  $("musicbox").classList.toggle("hidden", blocked);
+  if (blocked) {
+    const bar = $("wlBar"), fleft = Number((S.status || {}).filtersLeft || 0);
+    if (S.walletMissing) {
+      $("wlTitle").textContent = `Wallet '${S.wallet}' is not on the daemon`;
+      $("wlMsg").textContent = "A freshly imported wallet appears after a service restart. " +
+        "Or pick another wallet in the sidebar.";
+      bar.classList.remove("indeterminate"); $("wlFill").style.width = "0%";
+      $("wlDetail").textContent = "";
+    } else {
+      $("wlTitle").textContent = `Opening ${S.wallet}…`;
+      $("wlMsg").textContent = "The daemon is matching block filters and downloading matched " +
+        "blocks over P2P. Balances and transactions appear once it finishes.";
+      bar.classList.add("indeterminate");
+      $("wlDetail").textContent = fleft > 0
+        ? `syncing block filters · ${fleft.toLocaleString()} to go` : "";
+    }
+    $("syncNote").classList.add("hidden");
+    return;
+  }
 
   const note = $("syncNote");
   const fleft = Number(st.filtersLeft || 0);
-  if (S.walletMissing) {
-    note.classList.remove("hidden");
-    note.textContent = `⚠ wallet '${S.wallet}' is not on the daemon (yet) - a freshly ` +
-      "imported wallet appears after a service restart. Or pick another wallet in the sidebar.";
-  } else if (S.noCoord) {
+  if (S.noCoord) {
     note.classList.remove("hidden");
     note.innerHTML = "⚠ No coinjoin coordinator configured - coinjoin is disabled. " +
       '<a id="fixCoord">Choose one in Settings →</a>';
     $("fixCoord").onclick = showSettings;
-  } else if (S.loading) {
-    note.classList.remove("hidden");
-    note.textContent = "⟳ wallet is synchronizing - matching block filters and downloading " +
-      "matched blocks over P2P; balances appear when done.";
   } else if (fleft > 0) {
     note.classList.remove("hidden");
     note.textContent = `⟳ syncing block filters - ${fleft.toLocaleString()} to go`;
@@ -234,8 +252,8 @@ function render() {
       : (np ? `${fmtBtc(np)} BTC could be made private - press ▶` : "everything is private ◆");
   }
   $("mbToggle").textContent = S.cjOn ? "⏸" : "▶";
-  $("mbToggle").disabled = busy || wo;
-  $("mbStop").disabled = busy || wo;
+  $("mbToggle").disabled = wo;   // (loading/missing already returned early above)
+  $("mbStop").disabled = wo;
 }
 
 const esc = (s) => s.replace(/[&<>"']/g, (m) =>
