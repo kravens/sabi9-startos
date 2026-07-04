@@ -753,40 +753,101 @@ function coordHost(url) {
   let h;
   try { h = new URL(url).host.toLowerCase(); } catch (e) { h = String(url); }
   for (const p of ["www.", "api.", "btcpay.", "coordinator.", "coinjoin.", "wabisabi."])
-    if (h.startsWith(p)) h = h.slice(p.length);
+    if (h.startsWith(p) && h.slice(p.length).includes(".")) h = h.slice(p.length);
   return h || String(url);
 }
 
-async function showSettings() {
+async function showSettings(tab = "coordinator") {
   let s;
   try { s = await api("/settings"); } catch (e) { return toast("✗ " + friendly(e), true); }
+  // enum-ish fields: offer only values Wasabi 2.8 ships (plus whatever is set now) -
+  // its strict config loader re-defaults the whole file on an undecodable value
+  const sel = (id, cur, opts) => `<select id="${id}">` +
+    [...new Set([cur, ...opts])].filter(Boolean).map((o) =>
+      `<option${o === cur ? " selected" : ""}>${esc(String(o))}</option>`).join("") + `</select>`;
+
   openDialog(`
-    <h2><span class="back" onclick="closeDialog()">←</span> Settings</h2>
-    <div class="improve">COINJOIN COORDINATOR</div>
-    <p class="setp">Wasabi ships without a coordinator - you choose who batches your rounds.
-      A coordinator sees coinjoin activity and sets the coordination fee; it can <b>never</b>
-      steal funds. Current:
-      <b>${s.coordinatorUri ? esc(coordHost(s.coordinatorUri)) : "none - coinjoin is disabled"}</b></p>
-    <div id="coordList"><p class="setp">… fetching live coordinators (liquisabi.com) …</p></div>
-    <div class="frow"><label>COORDINATOR URL · empty = run without one · .onion ok via the daemon's Tor</label>
-      <input id="stCoord" value="${esc(s.coordinatorUri || "")}" spellcheck="false"
-             placeholder="https://your.coordinator/"></div>
-    <div class="improve">BITCOIN CORE RPC BACKEND · OPTIONAL</div>
-    <p class="setp">If Bitcoin Core runs on this Start9 node, the daemon can fetch blocks and
-      filters from it instead of syncing from public P2P peers. Leave empty to keep P2P.</p>
-    <div class="detline"><button class="abtn" id="stDetect">Detect bitcoind</button>
-      <span id="stDetRes" class="setp" style="margin:0"></span></div>
-    <div class="inline2">
-      <div class="frow"><label>ENDPOINT (host:port)</label>
-        <input id="stRpcEp" value="${esc(s.bitcoinRpcEndPoint || "")}"
-               placeholder="bitcoind.embassy:8332" spellcheck="false"></div>
-      <div class="frow"><label>CREDENTIALS (user:password)${s.bitcoinRpcCredentialSet ? " · currently set" : ""}</label>
-        <input id="stRpcCred" type="password"
-               placeholder="${s.bitcoinRpcCredentialSet ? "unchanged" : "rpcuser:rpcpassword"}"></div>
+    <h2><span class="back" onclick="closeDialog()">←</span> Settings
+      <span class="setp" style="margin:0 0 0 auto">network: <b>${esc(String(s.network))}</b></span></h2>
+    <div class="stabs">
+      <button class="stab" data-t="bitcoin">Bitcoin</button>
+      <button class="stab" data-t="coordinator">Coordinator</button>
+      <button class="stab" data-t="privacy">Privacy</button>
     </div>
+
+    <div id="st-bitcoin" class="stsec hidden">
+      <div class="improve">BITCOIN CORE RPC BACKEND · OPTIONAL</div>
+      <p class="setp">If Bitcoin Core runs on this Start9 node, the daemon fetches blocks and
+        filters from it instead of syncing from public P2P peers. Empty = keep P2P.</p>
+      <div class="detline"><button class="abtn" id="stDetect">Detect bitcoind</button>
+        <span id="stDetRes" class="setp" style="margin:0"></span></div>
+      <div class="inline2">
+        <div class="frow"><label>ENDPOINT (host:port)</label>
+          <input id="stRpcEp" value="${esc(s.bitcoinRpcEndPoint || "")}"
+                 placeholder="bitcoind.embassy:8332" spellcheck="false"></div>
+        <div class="frow"><label>CREDENTIALS (user:password)${s.bitcoinRpcCredentialSet ? " · currently set" : ""}</label>
+          <input id="stRpcCred" type="password"
+                 placeholder="${s.bitcoinRpcCredentialSet ? "unchanged" : "rpcuser:rpcpassword"}"></div>
+      </div>
+      <div class="improve">MEMPOOL</div>
+      <div class="inline2">
+        <div class="frow"><label>DUST THRESHOLD (BTC) - ignore smaller incoming coins</label>
+          <input id="stDust" value="${esc(String(s.dustThreshold))}" spellcheck="false"></div>
+        <div class="frow"><label>MAX DAYS IN MEMPOOL - rebroadcast/forget after</label>
+          <input id="stMemDays" value="${esc(String(s.maxDaysInMempool))}" spellcheck="false"></div>
+      </div>
+    </div>
+
+    <div id="st-coordinator" class="stsec hidden">
+      <p class="setp">Wasabi ships without a coordinator - you choose who batches your rounds.
+        A coordinator sees coinjoin activity and sets the coordination fee; it can <b>never</b>
+        steal funds. Current:
+        <b>${s.coordinatorUri ? esc(coordHost(s.coordinatorUri)) : "none - coinjoin is disabled"}</b></p>
+      <div id="coordList"><p class="setp">… fetching live coordinators (liquisabi.com) …</p></div>
+      <div class="frow"><label>COORDINATOR URL · empty = run without one · .onion ok via the daemon's Tor</label>
+        <input id="stCoord" value="${esc(s.coordinatorUri || "")}" spellcheck="false"
+               placeholder="https://your.coordinator/"></div>
+      <div class="inline2">
+        <div class="frow"><label>MAX COINJOIN MINING FEE RATE (sat/vB) - skip pricier rounds</label>
+          <input id="stMaxFee" value="${esc(String(s.maxCoinJoinMiningFeeRate))}" spellcheck="false"></div>
+        <div class="frow"><label>MIN INPUT COUNT - refuse smaller rounds (default 21)</label>
+          <input id="stMinIn" value="${esc(String(s.absoluteMinInputCount))}" spellcheck="false"></div>
+      </div>
+      <div class="frow"><label>COORDINATOR IDENTIFIER · advanced - leave as-is unless yours says otherwise</label>
+        <input id="stCoordId" value="${esc(String(s.coordinatorIdentifier))}" spellcheck="false"></div>
+    </div>
+
+    <div id="st-privacy" class="stsec hidden">
+      <div class="improve">NETWORK PRIVACY</div>
+      <div class="frow"><label>TOR - all daemon HTTP goes through Tor when enabled</label>
+        ${sel("stTor", s.useTor, ["Enabled", "Disabled"])}</div>
+      <div class="improve">EXTERNAL SERVICES - each query leaves your node (via Tor when enabled)</div>
+      <div class="inline2">
+        <div class="frow"><label>EXCHANGE RATE</label>
+          ${sel("stXr", s.exchangeRateProvider, ["MempoolSpace", "BlockstreamInfo"])}</div>
+        <div class="frow"><label>FEE ESTIMATION</label>
+          ${sel("stFr", s.feeRateEstimationProvider, ["MempoolSpace", "BlockstreamInfo"])}</div>
+        <div class="frow"><label>TX BROADCAST FALLBACK</label>
+          ${sel("stBc", s.externalTransactionBroadcaster, ["MempoolSpace", "BlockstreamInfo"])}</div>
+      </div>
+      <div class="improve">WALLET (read-only)</div>
+      <p class="setp">Anonymity score target of the open wallet:
+        <b>${esc(String((S.info && S.info.anonScoreTarget) || "—"))}</b> · these live per-wallet
+        in the wallet file; the daemon has no RPC to change them yet.</p>
+    </div>
+
     <div id="stSaved"></div>
     <div class="drow"><button class="abtn" onclick="closeDialog()">Close</button>
       <button class="abtn primary" id="stSave">Save</button></div>`);
+
+  const switchTab = (t) => {
+    document.querySelectorAll(".stsec").forEach((el) =>
+      el.classList.toggle("hidden", el.id !== "st-" + t));
+    document.querySelectorAll(".stab").forEach((b) =>
+      b.classList.toggle("active", b.dataset.t === t));
+  };
+  document.querySelectorAll(".stab").forEach((b) => b.onclick = () => switchTab(b.dataset.t));
+  switchTab(tab);
 
   api("/coordinators").then((c) => {
     if (!$("coordList")) return;                     // dialog was closed meanwhile
@@ -816,7 +877,16 @@ async function showSettings() {
   $("stSave").onclick = async () => {
     const body = {
       coordinatorUri: $("stCoord").value.trim(),
+      coordinatorIdentifier: $("stCoordId").value.trim(),
+      maxCoinJoinMiningFeeRate: $("stMaxFee").value.trim(),
+      absoluteMinInputCount: $("stMinIn").value.trim(),
       bitcoinRpcEndPoint: $("stRpcEp").value.trim(),
+      dustThreshold: $("stDust").value.trim(),
+      maxDaysInMempool: $("stMemDays").value.trim(),
+      useTor: $("stTor").value,
+      exchangeRateProvider: $("stXr").value,
+      feeRateEstimationProvider: $("stFr").value,
+      externalTransactionBroadcaster: $("stBc").value,
     };
     const cred = $("stRpcCred").value;
     if (cred) body.bitcoinRpcCredentialString = cred;
@@ -884,8 +954,14 @@ const DEMO_PAYS = [];                              // stateful: pay-in-coinjoin 
 // ?demo=1&empty=1 -> daemon with no wallets yet (exercises the welcome flow)
 const DEMO_WALLETS = new URLSearchParams(location.search).has("empty")
   ? [] : ["Alice's Wallet", "ColdVault"];
-const DEMO_SETTINGS = { coordinatorUri: "", bitcoinRpcEndPoint: "",
-                        bitcoinRpcCredentialSet: false, network: "Main", configFound: true };
+const DEMO_SETTINGS = {
+  coordinatorUri: "", coordinatorIdentifier: "CoinJoinCoordinatorIdentifier",
+  maxCoinJoinMiningFeeRate: 50, absoluteMinInputCount: 21,
+  bitcoinRpcEndPoint: "", bitcoinRpcCredentialSet: false, network: "Main",
+  dustThreshold: "0.00001", maxDaysInMempool: 30, useTor: "Enabled",
+  exchangeRateProvider: "MempoolSpace", feeRateEstimationProvider: "MempoolSpace",
+  externalTransactionBroadcaster: "MempoolSpace", configFound: true,
+};
 const DEMO_WATCHONLY = new Set();
 
 function demoRpc(method, params, wallet) {
@@ -944,8 +1020,8 @@ function demoRpc(method, params, wallet) {
 
 function demoApi(path, body) {
   if (path === "/settings" && body !== undefined) {
-    if ("coordinatorUri" in body) DEMO_SETTINGS.coordinatorUri = body.coordinatorUri;
-    if ("bitcoinRpcEndPoint" in body) DEMO_SETTINGS.bitcoinRpcEndPoint = body.bitcoinRpcEndPoint;
+    for (const k of Object.keys(DEMO_SETTINGS))
+      if (k in body) DEMO_SETTINGS[k] = body[k];
     if (body.bitcoinRpcCredentialString) DEMO_SETTINGS.bitcoinRpcCredentialSet = true;
     return Promise.resolve({ ok: true, restartRequired: true });
   }

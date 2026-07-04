@@ -189,6 +189,67 @@ def norm_coord_uri(s):                            # user text -> URI for Config.
     if host.endswith("wasabiwallet.io"): return None   # daemon rejects the old zkSNACKs host
     return s if s.endswith("/") else s + "/"
 
+# editable Config.json keys, Desktop-style Bitcoin/Coordinator/Privacy split.
+# ⚠ Wasabi 2.8's strict loader re-defaults the ENTIRE config if it cannot decode a
+# value, so enum-ish fields only accept values we know 2.8 ships (or the current one).
+_PROVIDERS = {"MempoolSpace", "BlockstreamInfo"}
+_USETOR = {"Enabled", "Disabled"}
+
+def validate_settings(req, cfg):
+    upd = {}
+    def keep_or(allowed, key):                    # allow known values or the current one
+        return set(allowed) | {cfg.get(key)} - {None}
+    if "coordinatorUri" in req:
+        uri = norm_coord_uri(str(req["coordinatorUri"] or ""))
+        if uri is None: raise ValueError("invalid coordinator URI")
+        upd["CoordinatorUri"] = uri
+    if "coordinatorIdentifier" in req:
+        v = str(req["coordinatorIdentifier"] or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9._\-]{1,100}", v):
+            raise ValueError("coordinator identifier: letters, digits, . _ - (max 100)")
+        upd["CoordinatorIdentifier"] = v
+    if "maxCoinJoinMiningFeeRate" in req:
+        try: v = float(req["maxCoinJoinMiningFeeRate"])
+        except (TypeError, ValueError): raise ValueError("max mining fee rate must be a number")
+        if not 1 <= v <= 1000: raise ValueError("max mining fee rate: 1-1000 sat/vB")
+        upd["MaxCoinJoinMiningFeeRate"] = v
+    if "absoluteMinInputCount" in req:
+        try: v = int(req["absoluteMinInputCount"])
+        except (TypeError, ValueError): raise ValueError("min input count must be a whole number")
+        if not 2 <= v <= 400: raise ValueError("min input count: 2-400 (Wasabi default 21)")
+        upd["AbsoluteMinInputCount"] = v
+    if "bitcoinRpcEndPoint" in req:
+        ep = str(req["bitcoinRpcEndPoint"] or "").strip()
+        if ep and not re.fullmatch(r"[A-Za-z0-9._\-]+(:\d{1,5})?", ep):
+            raise ValueError("endpoint must look like host:port")
+        upd["BitcoinRpcEndPoint"] = ep
+    if "bitcoinRpcCredentialString" in req:
+        upd["BitcoinRpcCredentialString"] = str(req["bitcoinRpcCredentialString"] or "")
+    if "dustThreshold" in req:
+        v = str(req["dustThreshold"] or "").strip()
+        if not re.fullmatch(r"\d+(\.\d{1,8})?", v) or not 0 <= float(v) <= 0.01:
+            raise ValueError("dust threshold: BTC amount between 0 and 0.01")
+        upd["DustThreshold"] = v
+    if "maxDaysInMempool" in req:
+        try: v = int(req["maxDaysInMempool"])
+        except (TypeError, ValueError): raise ValueError("days in mempool must be a whole number")
+        if not 1 <= v <= 90: raise ValueError("days in mempool: 1-90 (Wasabi default 30)")
+        upd["MaxDaysInMempool"] = v
+    if "useTor" in req:
+        v = str(req["useTor"] or "")
+        if v not in keep_or(_USETOR, "UseTor"): raise ValueError("Tor: Enabled or Disabled")
+        upd["UseTor"] = v
+    for jskey, ckey in (("exchangeRateProvider", "ExchangeRateProvider"),
+                        ("feeRateEstimationProvider", "FeeRateEstimationProvider"),
+                        ("externalTransactionBroadcaster", "ExternalTransactionBroadcaster")):
+        if jskey in req:
+            v = str(req[jskey] or "")
+            if v not in keep_or(_PROVIDERS, ckey):
+                raise ValueError(f"{jskey}: MempoolSpace or BlockstreamInfo")
+            upd[ckey] = v
+    if not upd: raise ValueError("nothing to save")
+    return upd
+
 _coord_cache = {"t": 0.0, "live": []}
 def live_coordinators(days=14, n=100, timeout=8):
     # coordinators with recent PUBLIC rounds (best effort, cached 10 min). Carries no
@@ -357,9 +418,18 @@ class Handler(BaseHTTPRequestHandler):
             cfg = read_wasabi_config()
             return self._send(200, {
                 "coordinatorUri": cfg.get("CoordinatorUri", ""),
+                "coordinatorIdentifier": cfg.get("CoordinatorIdentifier", "CoinJoinCoordinatorIdentifier"),
+                "maxCoinJoinMiningFeeRate": cfg.get("MaxCoinJoinMiningFeeRate", 50),
+                "absoluteMinInputCount": cfg.get("AbsoluteMinInputCount", 21),
                 "bitcoinRpcEndPoint": cfg.get("BitcoinRpcEndPoint", ""),
                 "bitcoinRpcCredentialSet": bool(cfg.get("BitcoinRpcCredentialString")),
                 "network": cfg.get("Network", "Main"),
+                "dustThreshold": cfg.get("DustThreshold", "0.00001"),
+                "maxDaysInMempool": cfg.get("MaxDaysInMempool", 30),
+                "useTor": cfg.get("UseTor", "Enabled"),
+                "exchangeRateProvider": cfg.get("ExchangeRateProvider", "MempoolSpace"),
+                "feeRateEstimationProvider": cfg.get("FeeRateEstimationProvider", "MempoolSpace"),
+                "externalTransactionBroadcaster": cfg.get("ExternalTransactionBroadcaster", "MempoolSpace"),
                 "configFound": bool(cfg),
             })
         if path == "/coordinators":
@@ -419,23 +489,11 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 ln = int(self.headers.get("Content-Length") or 0)
                 req = json.loads(self.rfile.read(min(ln, 100_000)).decode() or "{}")
-                upd = {}
-                if "coordinatorUri" in req:
-                    uri = norm_coord_uri(str(req["coordinatorUri"] or ""))
-                    if uri is None:
-                        return self._send(400, {"error": "invalid coordinator URI"})
-                    upd["CoordinatorUri"] = uri
-                if "bitcoinRpcEndPoint" in req:
-                    ep = str(req["bitcoinRpcEndPoint"] or "").strip()
-                    if ep and not re.fullmatch(r"[A-Za-z0-9._\-]+(:\d{1,5})?", ep):
-                        return self._send(400, {"error": "endpoint must look like host:port"})
-                    upd["BitcoinRpcEndPoint"] = ep
-                if "bitcoinRpcCredentialString" in req:
-                    upd["BitcoinRpcCredentialString"] = str(req["bitcoinRpcCredentialString"] or "")
-                if not upd:
-                    return self._send(400, {"error": "nothing to save"})
+                upd = validate_settings(req, read_wasabi_config())
                 edit_wasabi_config(upd)
                 return self._send(200, {"ok": True, "restartRequired": True})
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
             except Exception as e:
                 return self._send(502, {"error": str(e) or type(e).__name__})
         if path != "/rpc":
