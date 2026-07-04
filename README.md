@@ -24,17 +24,39 @@ sibling of [`sabi.py`](https://github.com/kravens/coinjoin.nl/blob/main/scripts/
 - RPC proxy whitelists wallet methods; nothing that could exfiltrate keys.
 - Both daemons supervised by StartOS with health checks (RPC port, UI port).
 
-## Building
+## Building a community package (.s9pk)
+
+Requires a Linux/macOS box with the Start9 toolchain (Docker, make, Node 22,
+`squashfs-tools`, `start-cli` — see the
+[Environment Setup](https://docs.start9.com/packaging/0.4.0.x/environment-setup.html)).
+
+The recommended, tool-blessed way is to build inside a Start9 workspace:
 
 ```bash
+# one-time: create an AI-ready packaging workspace (holds your signing key + host/registry config)
+start-cli s9pk init-workspace my-workspace
+cd my-workspace
+git clone https://github.com/kravens/sabi9-startos
+cd sabi9-startos
+
 npm install        # pulls @start9labs/start-sdk (provides s9pk.mk for make)
-make               # builds sabi9.s9pk (docker build of ./Dockerfile for x86_64 + aarch64)
-start-cli package install sabi9.s9pk
+make               # -> sabi9_x86_64.s9pk and sabi9_aarch64.s9pk (docker build of ./Dockerfile)
+make install       # optional: sideload to the box in ~/.startos/config.yaml
 ```
 
-The Docker image downloads the official self-contained Wasabi release
-(`Wasabi-2.8.0-linux-{x64,arm64}.tar.gz`) at build time - see `UPDATING.md`
+Distribute the resulting `.s9pk` for sideloading (**System → Sideload** in
+StartOS), or publish it to a community registry with the included GitHub
+Actions workflows (`.github/workflows/`, which delegate to Start9's reusable
+CI). The Docker image downloads the official self-contained Wasabi release
+(`Wasabi-2.8.0-linux-{x64,arm64}.tar.gz`) at build time — see `UPDATING.md`
 for bumping the version.
+
+> This repo was authored by hand against the
+> [Project Structure](https://docs.start9.com/packaging/0.4.0.x/project-structure.html)
+> reference (the scaffolder `start-cli s9pk init-package` is Linux/macOS-only).
+> It matches the documented layout; if you prefer, scaffold a fresh package
+> with `init-package` and drop in `startos/`, `web/`, `Dockerfile` and
+> `wasabi-start.sh` from here.
 
 ## Development
 
