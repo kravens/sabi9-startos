@@ -351,6 +351,36 @@ def _write_wallet(path, obj):
     with open(path, "w", encoding="utf-8") as f:   # write WITHOUT a BOM
         json.dump(obj, f, indent=2)
 
+def _existing_wallet_path(name):
+    name = str(name or "").strip()
+    if not re.fullmatch(WALLET_NAME_RE, name):
+        raise ValueError("bad wallet name")
+    p = os.path.join(os.path.dirname(WASABI_CFG), "Wallets", name + ".json")
+    if not os.path.isfile(p):
+        raise ValueError(f"no wallet '{name}' on the daemon")
+    return p
+
+# per-WALLET settings live in the wallet file (no daemon RPC exists for them);
+# edits apply after a daemon restart. The daemon rewrites wallet files itself,
+# so a save between our edit and the restart can revert the value - harmless.
+def read_wallet_settings(name):
+    with open(_existing_wallet_path(name), encoding="utf-8-sig") as f:
+        d = json.load(f)
+    return {"anonScoreTarget": d.get("AnonScoreTarget", 10),
+            "redCoinIsolation": bool(d.get("RedCoinIsolation", False)),
+            "watchOnly": not d.get("EncryptedSecret")}
+
+def set_wallet_anon_target(name, value):
+    try: v = int(value)
+    except (TypeError, ValueError): raise ValueError("anonymity target must be a whole number")
+    if not 2 <= v <= 300: raise ValueError("anonymity target: 2-300 (Wasabi default 10)")
+    p = _existing_wallet_path(name)
+    with open(p, encoding="utf-8-sig") as f:
+        d = json.load(f)
+    d["AnonScoreTarget"] = v
+    _write_wallet(p, d)
+    return v
+
 def is_full_wallet_file(obj):
     # a ⇓-exported (or Wasabi-written) wallet file, as opposed to a bare
     # ColdCard/SeedSigner skeleton - skeletons have none of these
@@ -462,6 +492,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"known": KNOWN_COORDINATORS, "live": live})
         if path == "/detect-bitcoind":
             return self._send(200, {"found": detect_bitcoind()})
+        if path == "/wallet-settings":
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            try:
+                return self._send(200, read_wallet_settings((q.get("name") or [""])[0]))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
         if path == "/export-wallet":
             # download the wallet FILE - the only backup that keeps labels + anonymity
             # metadata (recovery words alone restore funds, not privacy state). Hot
@@ -498,6 +534,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
+        if path == "/wallet-settings":
+            try:
+                ln = int(self.headers.get("Content-Length") or 0)
+                req = json.loads(self.rfile.read(min(ln, 100_000)).decode() or "{}")
+                v = set_wallet_anon_target(req.get("name"), req.get("anonScoreTarget"))
+                return self._send(200, {"ok": True, "anonScoreTarget": v, "restartRequired": True})
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except Exception as e:
+                return self._send(502, {"error": str(e) or type(e).__name__})
         if path == "/restart-daemon":
             # wassabeed only scans Wallets/ at startup, so a skeleton import needs a
             # daemon restart. RPC 'stop' exits the process; the StartOS supervisor

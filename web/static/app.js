@@ -808,8 +808,12 @@ function coordHost(url) {
 }
 
 async function showSettings(tab = "coordinator") {
-  let s;
+  let s, ws = null;
   try { s = await api("/settings"); } catch (e) { return toast("✗ " + friendly(e), true); }
+  if (S.wallet) {
+    try { ws = await api("/wallet-settings?name=" + encodeURIComponent(S.wallet)); }
+    catch (e) {}
+  }
   // enum-ish fields: offer only values Wasabi 2.8 ships (plus whatever is set now) -
   // its strict config loader re-defaults the whole file on an undecodable value
   const sel = (id, cur, opts) => `<select id="${id}">` +
@@ -878,10 +882,15 @@ async function showSettings(tab = "coordinator") {
         <div class="frow"><label>TX BROADCAST FALLBACK</label>
           ${sel("stBc", s.externalTransactionBroadcaster, ["MempoolSpace", "BlockstreamInfo"])}</div>
       </div>
-      <div class="improve">WALLET (read-only)</div>
-      <p class="setp">Anonymity score target of the open wallet:
-        <b>${esc(String((S.info && S.info.anonScoreTarget) || "—"))}</b> · these live per-wallet
-        in the wallet file; the daemon has no RPC to change them yet.</p>
+      <div class="improve">COINJOIN PRIVACY${ws ? ` - WALLET '${esc(S.wallet)}'` : ""}</div>
+      ${ws ? `
+      <div class="frow"><label>ANONYMITY SCORE TARGET - coinjoin until every coin reaches this
+        (default 10 · higher = more mixing, more fees, more privacy)</label>
+        <input id="stAnon" value="${esc(String(ws.anonScoreTarget))}" spellcheck="false"
+               style="max-width:140px"></div>
+      <p class="setp">Lives in the wallet file - a change applies after the daemon restarts
+        (Save offers a restart button).${ws.redCoinIsolation ? " Red coin isolation: on." : ""}</p>`
+      : `<p class="setp">Open a wallet to set its anonymity score target.</p>`}
     </div>
 
     <div id="stSaved"></div>
@@ -940,6 +949,9 @@ async function showSettings(tab = "coordinator") {
     try {
       $("stSave").disabled = true;
       await api("/settings", body);
+      if ($("stAnon"))
+        await api("/wallet-settings", { name: S.wallet,
+                                        anonScoreTarget: $("stAnon").value.trim() });
       $("stSaved").innerHTML = `<div class="wchip good"><span class="wi">✓</span>
         <span>Saved to Config.json - the daemon only reads it at startup.</span>
         <button class="abtn" id="stRestart" style="margin-left:auto;flex:0 0 auto">⟳ Restart now</button></div>`;
@@ -1019,6 +1031,7 @@ const DEMO_SETTINGS = {
   externalTransactionBroadcaster: "MempoolSpace", configFound: true,
 };
 const DEMO_WATCHONLY = new Set();
+const DEMO_WSET = {};                              // per-wallet anon-score targets
 
 function demoRpc(method, params, wallet) {
   const W = DEMO_WALLETS;
@@ -1089,6 +1102,17 @@ function demoApi(path, body) {
   });
   if (path === "/detect-bitcoind") return Promise.resolve({ found: ["bitcoind.embassy:8332"] });
   if (path === "/restart-daemon") return Promise.resolve({ ok: true });
+  if (path.startsWith("/wallet-settings")) {
+    if (body !== undefined) {
+      const v = parseInt(body.anonScoreTarget, 10);
+      if (!(v >= 2 && v <= 300)) return Promise.reject(new Error("anonymity target: 2-300"));
+      DEMO_WSET[body.name] = v;
+      return Promise.resolve({ ok: true, anonScoreTarget: v, restartRequired: true });
+    }
+    const name = decodeURIComponent(path.split("name=")[1] || "");
+    return Promise.resolve({ anonScoreTarget: DEMO_WSET[name] || 10,
+                             redCoinIsolation: false, watchOnly: DEMO_WATCHONLY.has(name) });
+  }
   if (path === "/import-skeleton") {
     if (!/xpub|zpub|ExtPubKey/.test(String(body.skeleton))) return Promise.reject(new Error("demo: no key found"));
     let full = null;
