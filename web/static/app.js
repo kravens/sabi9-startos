@@ -7,9 +7,12 @@ const DEMO = new URLSearchParams(location.search).has("demo");
 // ---------- state -------------------------------------------------------------------
 const S = {
   wallets: [], wallet: localStorage.getItem("sabi9.wallet") || null,
+  walletsKnown: false,      // true once the daemon answered listwallets (drives welcome)
+  unlocked: {},             // wallet -> password, session-only, NEVER persisted
   info: null, coins: [], history: [], fees: null, status: null,
   loading: false, cjOn: false, discreet: localStorage.getItem("sabi9.discreet") === "1",
 };
+const pwOf = () => S.unlocked[S.wallet] || "";
 
 // ---------- rpc ---------------------------------------------------------------------
 async function rpc(method, params = [], wallet = undefined) {
@@ -21,6 +24,18 @@ async function rpc(method, params = [], wallet = undefined) {
   const j = await r.json();
   if (j.error) throw new Error(j.error.message || j.error);
   return j.result !== undefined ? j.result : j;
+}
+
+// non-RPC endpoints on sabi9d (settings / coordinator list / bitcoind probe)
+async function api(path, body = undefined) {
+  if (DEMO) return demoApi(path, body);
+  const r = await fetch(path, body === undefined ? undefined : {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const j = await r.json();
+  if (j.error) throw new Error(j.error);
+  return j;
 }
 
 // ---------- formatting --------------------------------------------------------------
@@ -48,28 +63,36 @@ function toast(msg, err = false, ms = 3500) {
 async function poll() {
   try {
     S.status = await rpc("getstatus");
-    if (!S.wallets.length) {
-      const ws = await rpc("listwallets");
-      S.wallets = (ws || []).map((w) => w.walletName || w);
-    }
+    const ws = await rpc("listwallets");
+    S.wallets = (ws || []).map((w) => w.walletName || w);
+    S.walletsKnown = true;    // daemon is up and answered - welcome/sidebar can decide
     if (S.wallet) {
-      S.info = await rpc("getwalletinfo", [], S.wallet);
-      if (S.info && S.info.loaded === false) {
-        S.loading = true; S.coins = []; S.history = [];
-      } else {
-        S.loading = false;
-        S.coins = (await rpc("listunspentcoins", [], S.wallet)) || [];
-        let h = (await rpc("gethistory", [], S.wallet)) || [];
-        if (!Array.isArray(h)) h = h.transactions || [];
-        h.sort((a, b) => {                       // newest first, unconfirmed pinned
-          const ha = parseInt(a.height) || 1 << 30, hb = parseInt(b.height) || 1 << 30;
-          return hb - ha || String(b.datetime || "").localeCompare(String(a.datetime || ""));
-        });
-        S.history = h;
-        try { S.fees = await rpc("getfeerates", [], S.wallet); } catch (e) {}
+      try {
+        S.info = await rpc("getwalletinfo", [], S.wallet);
+        S.noCoord = false;
+        if (S.info && S.info.loaded === false) {
+          S.loading = true; S.coins = []; S.history = [];
+        } else {
+          S.loading = false;
+          S.coins = (await rpc("listunspentcoins", [], S.wallet)) || [];
+          let h = (await rpc("gethistory", [], S.wallet)) || [];
+          if (!Array.isArray(h)) h = h.transactions || [];
+          h.sort((a, b) => {                       // newest first, unconfirmed pinned
+            const ha = parseInt(a.height) || 1 << 30, hb = parseInt(b.height) || 1 << 30;
+            return hb - ha || String(b.datetime || "").localeCompare(String(a.datetime || ""));
+          });
+          S.history = h;
+          try { S.fees = await rpc("getfeerates", [], S.wallet); } catch (e) {}
+        }
+        const cjs = String((S.info && S.info.coinjoinStatus) || "");
+        S.cjOn = cjs !== "" && cjs.toLowerCase() !== "idle";
+      } catch (e) {
+        // 2.8.0: getwalletinfo throws without a coordinator; async load throws too
+        const m = String(e.message || e).toLowerCase();
+        if (m.includes("no coordinator")) { S.noCoord = true; S.loading = false; }
+        else if (m.includes("no wallet loaded")) { S.loading = true; }
+        else throw e;
       }
-      const cjs = String((S.info && S.info.coinjoinStatus) || "");
-      S.cjOn = cjs !== "" && cjs.toLowerCase() !== "idle";
     }
     render();
   } catch (e) {
@@ -81,14 +104,44 @@ async function poll() {
 // ---------- render -------------------------------------------------------------------
 function render() {
   document.body.classList.toggle("discreet", S.discreet);
-  if (!S.wallet) { showWalletPicker(); return; }
-  $("walletTitle").textContent = S.wallet;
+
+  // status strip: tor / chain height / network (from getstatus)
+  const st = S.status || {};
+  const torOk = String(st.torStatus || "").toLowerCase().startsWith(("running"));
+  $("statusline").innerHTML = st.bestBlockchainHeight
+    ? `<span class="dot ${torOk ? "on" : "off"}">●</span> Tor · ` +
+      `#${Number(st.bestBlockchainHeight).toLocaleString()} · ${esc(String(st.network || ""))}`
+    : "";
+
+  renderSidebar();
+
+  // screen state: welcome (daemon answered, zero wallets) / pick-a-wallet / dashboard
+  const show = (id, on) => $(id).classList.toggle("hidden", !on);
+  if (!S.wallet) {
+    show("dashboard", false); $("musicbox").classList.add("hidden");
+    show("welcome", S.walletsKnown && !S.wallets.length);
+    show("emptyState", S.walletsKnown && S.wallets.length > 0);
+    return;
+  }
+  show("welcome", false); show("emptyState", false); show("dashboard", true);
+  const wo = !!(S.info && S.info.isWatchOnly);
+  $("walletTitle").innerHTML = esc(S.wallet) +
+    (wo ? ' <span class="wobadge">◇ watch-only</span>' : "");
 
   const note = $("syncNote");
-  if (S.loading) {
+  const fleft = Number(st.filtersLeft || 0);
+  if (S.noCoord) {
+    note.classList.remove("hidden");
+    note.innerHTML = "⚠ No coinjoin coordinator configured - coinjoin is disabled. " +
+      '<a id="fixCoord">Choose one in Settings →</a>';
+    $("fixCoord").onclick = showSettings;
+  } else if (S.loading) {
     note.classList.remove("hidden");
     note.textContent = "⟳ wallet is synchronizing - matching block filters and downloading " +
       "matched blocks over P2P; balances appear when done.";
+  } else if (fleft > 0) {
+    note.classList.remove("hidden");
+    note.textContent = `⟳ syncing block filters - ${fleft.toLocaleString()} to go`;
   } else note.classList.add("hidden");
 
   const tot = S.coins.reduce((a, c) => a + (c.amount || 0), 0);
@@ -110,63 +163,275 @@ function render() {
   for (const h of S.history.slice(0, 200)) {
     const tr = document.createElement("tr");
     const amt = h.amount || 0;
-    const conf = parseInt(h.height) ? `block ${parseInt(h.height).toLocaleString()}` : "pending";
+    const pending = !parseInt(h.height);
+    const conf = pending ? "pending" : `block ${parseInt(h.height).toLocaleString()}`;
     const cj = isCj(h);
+    const acts = pending && h.tx
+      ? ` <button class="txa" data-a="speed" title="Speed up (RBF/CPFP)">⚡</button>` +
+        (amt < 0 ? `<button class="txa" data-a="cancel" title="Cancel (double-spend back to yourself)">✕</button>` : "")
+      : "";
     tr.innerHTML =
-      `<td class="ic">${parseInt(h.height) ? "✓" : "⌛"} ${cj ? '<span class="cj">◆</span>' : "⇄"}</td>` +
+      `<td class="ic">${pending ? "⌛" : "✓"} ${cj ? '<span class="cj">◆</span>' : "⇄"}</td>` +
       `<td class="date">${String(h.datetime || "").slice(0, 10)}</td>` +
       `<td class="amt ${amt > 0 ? "pos" : ""}">${amt > 0 ? "+" : ""}${fmtBtc(amt)} BTC</td>` +
       `<td class="lbl">${cj ? '<span class="chip">coinjoin</span>'
         : (h.label ? `<span class="chip">${esc(String(h.label))}</span>` : "")}</td>` +
-      `<td class="conf ${parseInt(h.height) ? "" : "unconf"}">${conf}</td>`;
+      `<td class="conf ${pending ? "unconf" : ""}">${conf}${acts}</td>`;
     tr.title = h.tx || "";
     tr.onclick = () => { navigator.clipboard && navigator.clipboard.writeText(h.tx || "");
                          toast("txid copied"); };
+    tr.querySelectorAll(".txa").forEach((b) => b.onclick = (ev) => {
+      ev.stopPropagation(); showTxFix(b.dataset.a, h.tx);
+    });
     tb.appendChild(tr);
   }
 
-  // music box
+  // music box: green pulse while in a round, amber pulse while signing/broadcasting
   const mb = $("musicbox");
   mb.classList.remove("hidden");
-  mb.classList.toggle("mixing", S.cjOn);
+  const cjs2 = String((S.info && S.info.coinjoinStatus) || "");
+  const critical = S.cjOn && /critical/i.test(cjs2);
+  mb.classList.toggle("mixing", S.cjOn && !critical);
+  mb.classList.toggle("critical", critical);
   $("mbStatus").textContent = S.cjOn
-    ? ((S.info && S.info.coinjoinStatus) === "In critical phase"
-        ? "Signing the coinjoin ..." : "Awaiting other participants")
+    ? (critical ? "Signing the coinjoin - do not stop the service"
+                : "Awaiting other participants")
     : "Coinjoin is idle";
   const np = S.coins.filter((c) => anonOf(c) < target())
                     .reduce((a, c) => a + (c.amount || 0), 0);
   $("mbSub").textContent = S.cjOn ? `mixing · ${fmtBtc(np)} BTC still non-private`
-    : (np ? `${fmtBtc(np)} BTC could be made private` : "everything is private ◆");
-  $("mbToggle").textContent = S.cjOn ? "Pause" : "Start";
+    : (np ? `${fmtBtc(np)} BTC could be made private - press ▶` : "everything is private ◆");
+  $("mbToggle").textContent = S.cjOn ? "⏸" : "▶";
 }
 
 const esc = (s) => s.replace(/[&<>"']/g, (m) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
 
 // ---------- dialogs -------------------------------------------------------------------
-function openDialog(html) {
+let dialogLocked = false;              // locked = Escape/overlay-click can't dismiss it
+function openDialog(html, opts = {}) {
   $("dialog").innerHTML = html;
   $("overlay").classList.remove("hidden");
+  dialogLocked = !!opts.locked;
 }
-function closeDialog() { $("overlay").classList.add("hidden"); }
+function closeDialog(force = false) {
+  if (dialogLocked && !force) return;  // e.g. the one-time mnemonic reveal
+  dialogLocked = false;
+  $("overlay").classList.add("hidden");
+}
+const dialogOpen = () => !$("overlay").classList.contains("hidden");
 $("overlay").addEventListener("click", (e) => { if (e.target.id === "overlay") closeDialog(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDialog(); });
 
-// wallet picker
-function showWalletPicker() {
-  const rows = S.wallets.map((w) =>
-    `<div class="wrow" data-w="${esc(w)}"><span class="dot">●</span> ${esc(w)}
-     <span class="tag">open →</span></div>`).join("") ||
-    "<p style='color:var(--dim)'>No wallets found on the daemon yet ...</p>";
-  openDialog(`<h2>Select a wallet</h2>${rows}`);
-  document.querySelectorAll(".wrow").forEach((r) => {
-    r.onclick = async () => {
+// sidebar wallet list: every wallet on the daemon, locked until the user opens it
+function renderSidebar() {
+  const el = $("sbWallets");
+  el.innerHTML = S.wallets.map((w) => {
+    const active = w === S.wallet;
+    const open = active || (w in S.unlocked);
+    return `<div class="swrow ${active ? "active" : ""}" data-w="${esc(w)}"
+      title="${open ? esc(w) : esc(w) + " · locked - click to open"}">
+      <span class="dot ${open ? "on" : ""}">●</span>
+      <span class="swname">${esc(w)}</span>${open ? "" : '<span class="swlock">locked</span>'}</div>`;
+  }).join("") + (S.walletsKnown
+    ? `<div class="swrow add" id="sbAdd"><span class="dot">＋</span>
+       <span class="swname">Add wallet</span></div>` : "");
+  el.querySelectorAll(".swrow[data-w]").forEach((r) => {
+    r.onclick = () => {
       const w = r.dataset.w;
-      try { await rpc("loadwallet", [w]); } catch (e) {}
-      S.wallet = w; localStorage.setItem("sabi9.wallet", w);
-      closeDialog(); toast(`loading ${w} ...`); poll();
+      if (w === S.wallet) return;
+      if (w in S.unlocked) activateWallet(w, S.unlocked[w]);
+      else showUnlock(w);
     };
   });
+  if ($("sbAdd")) $("sbAdd").onclick = showAddWallet;
+}
+
+async function activateWallet(name, pw) {
+  try { await rpc("loadwallet", [name]); } catch (e) {}
+  S.unlocked[name] = pw || "";        // held in memory for this session only
+  S.wallet = name; localStorage.setItem("sabi9.wallet", name);
+  S.info = null; S.coins = []; S.history = []; S.loading = true;
+  closeDialog(); toast(`opening ${name} ...`); poll();
+}
+
+function showUnlock(name) {
+  openDialog(`
+    <h2><span class="back" onclick="closeDialog()">←</span> Open ${esc(name)}</h2>
+    <div class="frow"><label>WALLET PASSWORD</label>
+      <input id="ulPw" type="password" autofocus></div>
+    <p class="setp">The password stays on this device for the session and pre-fills
+      spend and coinjoin actions. The daemon verifies it when you spend - a wallet with
+      no password opens with an empty field.</p>
+    <div class="drow"><button class="abtn" onclick="closeDialog()">Cancel</button>
+      <button class="abtn primary" id="ulGo">Open →</button></div>`);
+  const go = () => activateWallet(name, $("ulPw").value);
+  $("ulGo").onclick = go;
+  $("ulPw").addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
+  $("ulPw").focus();
+}
+
+function showAddWallet() {
+  openDialog(`<h2>Add wallet</h2>
+    <div class="wrow action" id="wpCreate"><span class="dot">＋</span> Create new wallet
+      <span class="tag">generate →</span></div>
+    <div class="wrow action" id="wpRecover"><span class="dot">⟳</span> Recover from backup
+      <span class="tag">12–24 words →</span></div>
+    <div class="wrow action" id="wpImport"><span class="dot">◇</span> Import hardware wallet
+      <span class="tag">ColdCard · SeedSigner · watch-only →</span></div>`);
+  $("wpCreate").onclick = showCreateWallet;
+  $("wpRecover").onclick = showRecoverWallet;
+  $("wpImport").onclick = showImportWallet;
+}
+
+// import a ColdCard / SeedSigner skeleton -> watch-only wallet (fully offline pairing)
+function showImportWallet() {
+  openDialog(`
+    <h2><span class="back" id="iwBack">←</span> Import hardware wallet</h2>
+    <p class="setp">Pairs a cold wallet <b>without it ever touching a computer network</b>:
+      on a ColdCard run <i>Advanced → Export Wallet → Wasabi Wallet</i> and bring the file
+      here by SD card - or paste the JSON / the account <b>xpub/zpub</b> shown by a
+      SeedSigner. The result is a <b>watch-only</b> wallet: it sees balances and makes
+      receive addresses, but this server can never spend from it.</p>
+    <div class="frow"><label>WALLET NAME</label>
+      <input id="iwName" placeholder="e.g. ColdCard" spellcheck="false"></div>
+    <div id="iwDrop">⇩ drop the skeleton file here — or click to choose
+      <input type="file" id="iwFile" accept=".json,application/json,text/plain" hidden></div>
+    <div class="frow"><label>… OR PASTE - SKELETON JSON, OR A BARE XPUB / ZPUB</label>
+      <textarea id="iwText" rows="4" spellcheck="false"
+        placeholder='{"MasterFingerprint": "0F056943", "ExtPubKey": "xpub6..."}  ·  or  ·  zpub6r...'></textarea></div>
+    <div class="frow"><label>MASTER FINGERPRINT (8 hex chars - auto-filled from the file)</label>
+      <input id="iwFp" placeholder="0f056943" spellcheck="false" style="max-width:200px"></div>
+    <div class="drow"><button class="abtn" id="iwCancel">Cancel</button>
+      <button class="abtn primary" id="iwGo">Import →</button></div>`);
+  $("iwBack").onclick = showAddWallet;
+  $("iwCancel").onclick = () => closeDialog();
+
+  const ingest = (text) => {
+    $("iwText").value = text.trim();
+    try {                                   // best-effort prefill; server re-validates
+      const j = JSON.parse(text);
+      const fp = j.MasterFingerprint || j.xfp || "";
+      if (fp) $("iwFp").value = String(fp).toLowerCase();
+      if (!$("iwName").value && j.ColdCardFirmwareVersion) $("iwName").value = "ColdCard";
+    } catch (e) {}
+  };
+  const drop = $("iwDrop");
+  drop.onclick = () => $("iwFile").click();
+  $("iwFile").onchange = () => {
+    const f = $("iwFile").files[0];
+    if (f) f.text().then(ingest);
+  };
+  drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
+  drop.ondragleave = () => drop.classList.remove("over");
+  drop.ondrop = (e) => {
+    e.preventDefault(); drop.classList.remove("over");
+    const f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) f.text().then(ingest);
+  };
+
+  $("iwGo").onclick = async () => {
+    const name = $("iwName").value.trim();
+    if (!name) return toast("wallet needs a name", true);
+    if (!$("iwText").value.trim()) return toast("drop the skeleton file or paste it", true);
+    try {
+      $("iwGo").disabled = true;
+      const r = await api("/import-skeleton", {
+        name, skeleton: $("iwText").value, masterFingerprint: $("iwFp").value.trim(),
+      });
+      await activateWallet(r.name, "");     // watch-only: empty password
+      toast(`◇ '${r.name}' imported - watch-only, syncing …`);
+    } catch (e) { toast("✗ " + e.message, true, 7000); $("iwGo").disabled = false; }
+  };
+}
+
+// create wallet: name + password -> daemon returns the recovery mnemonic (shown once)
+function showCreateWallet() {
+  openDialog(`
+    <h2><span class="back" id="cwBack">←</span> Create wallet</h2>
+    <div class="frow"><label>WALLET NAME</label>
+      <input id="cwName" placeholder="e.g. Savings" spellcheck="false"></div>
+    <div class="frow"><label>PASSWORD</label><input id="cwPw" type="password"></div>
+    <div class="frow"><label>CONFIRM PASSWORD</label><input id="cwPw2" type="password"></div>
+    <p style="color:var(--dim);font-size:12.5px">The password encrypts the wallet, is asked for
+      every spend and coinjoin, and is <b>part of the recovery</b>: restoring this wallet later
+      needs the recovery words <b>and</b> this exact password. It cannot be reset — write it down.</p>
+    <div class="drow"><button class="abtn" id="cwCancel">Cancel</button>
+      <button class="abtn primary" id="cwGo">Create →</button></div>`);
+  $("cwBack").onclick = () => closeDialog();
+  $("cwCancel").onclick = () => closeDialog();
+  $("cwGo").onclick = async () => {
+    const name = $("cwName").value.trim();
+    const pw = $("cwPw").value, pw2 = $("cwPw2").value;
+    if (!name) return toast("wallet needs a name", true);
+    if (pw !== pw2) return toast("passwords don't match", true);
+    try {
+      $("cwGo").disabled = true;
+      const mn = await rpc("createwallet", [name, pw]);
+      const words = typeof mn === "string" ? mn : (mn && (mn.mnemonic || mn.recoveryWords)) || String(mn);
+      showMnemonic(name, words, pw);
+    } catch (e) { toast("✗ " + e.message, true, 6000); $("cwGo").disabled = false; }
+  };
+}
+
+// one-time recovery-words reveal; must acknowledge before the wallet opens
+function showMnemonic(name, mnemonic, pw) {
+  const words = String(mnemonic).split(/\s+/).filter(Boolean);
+  const grid = words.map((w, i) =>
+    `<div class="mnw"><span class="mni">${i + 1}</span>${esc(w)}</div>`).join("");
+  openDialog(`
+    <h2>Recovery words · ${esc(name)}</h2>
+    <div class="wchip warn"><span class="wi">⚠</span><span>Write these ${words.length} words on paper,
+      <b>in this order</b>. They are shown <b>only once</b>. Anyone who has them can take your coins —
+      never type them into anything but a wallet you trust.</span></div>
+    <div class="wchip info"><span class="wi">ⓘ</span><span>Restoring this wallet needs the words
+      <b>and your password together</b> — a different password recovers a different (empty) wallet.
+      Store the words and the password in <b>separate places</b>.</span></div>
+    <div id="mnGrid">${grid}</div>
+    <label class="mnack"><input type="checkbox" id="mnAck"> I have written them down safely</label>
+    <div class="drow"><button class="abtn primary" id="mnDone" disabled>Open wallet →</button></div>`,
+    { locked: true });                 // Escape / overlay-click must not eat the only reveal
+  $("mnAck").onchange = () => { $("mnDone").disabled = !$("mnAck").checked; };
+  $("mnDone").onclick = async () => {
+    closeDialog(true);                 // release the lock, then open normally
+    await activateWallet(name, pw);
+    toast(`wallet '${name}' created ✓`);
+  };
+}
+
+// recover wallet from a 12/15/18/21/24-word mnemonic + new password
+function showRecoverWallet() {
+  openDialog(`
+    <h2><span class="back" id="rwBack">←</span> Recover wallet</h2>
+    <div class="frow"><label>WALLET NAME</label>
+      <input id="rwName" placeholder="e.g. Savings" spellcheck="false"></div>
+    <div class="frow"><label>RECOVERY WORDS (12 · 15 · 18 · 21 · 24, space separated)</label>
+      <textarea id="rwMn" rows="3" placeholder="word1 word2 word3 …" spellcheck="false"></textarea></div>
+    <div class="frow"><label>WALLET PASSWORD — THE ONE USED WHEN THE WALLET WAS CREATED</label>
+      <input id="rwPw" type="password"></div>
+    <p style="color:var(--dim);font-size:12.5px">The password is part of the wallet itself: words +
+      a <b>different</b> password open a different (empty) wallet, with no error shown. If the
+      balance comes up empty, re-check the password first. Recovery re-scans block filters —
+      balances may take a while to appear.</p>
+    <div class="drow"><button class="abtn" id="rwCancel">Cancel</button>
+      <button class="abtn primary" id="rwGo">Recover →</button></div>`);
+  $("rwBack").onclick = () => closeDialog();
+  $("rwCancel").onclick = () => closeDialog();
+  $("rwGo").onclick = async () => {
+    const name = $("rwName").value.trim();
+    const mn = $("rwMn").value.trim().split(/\s+/).filter(Boolean).join(" ");
+    const pw = $("rwPw").value;
+    const wc = mn ? mn.split(" ").length : 0;
+    if (!name) return toast("wallet needs a name", true);
+    if (![12, 15, 18, 21, 24].includes(wc))
+      return toast("recovery must be 12 / 15 / 18 / 21 / 24 words", true);
+    try {
+      $("rwGo").disabled = true;
+      await rpc("recoverwallet", [name, mn, pw]);
+      await activateWallet(name, pw);
+      toast(`wallet '${name}' recovered — syncing …`);
+    } catch (e) { toast("✗ " + e.message, true, 6000); $("rwGo").disabled = false; }
+  };
 }
 
 // ---------- send + preview (change avoidance) -----------------------------------------
@@ -293,7 +558,7 @@ function showPreview(p) {
           <div class="fact"><span class="fi">▤</span><span class="fk">Fee${chosen ? "" : " (estimate)"}</span>
             <span class="fv">${fmtBtc(fee)} BTC (${fmtUsd(fee)}) · ${useCoins.length} coins in</span></div>
           <div class="frow" style="margin-top:16px"><label>WALLET PASSWORD</label>
-            <input id="pvPw" type="password"></div>
+            <input id="pvPw" type="password" value="${esc(pwOf())}"></div>
           <div class="drow"><button class="abtn" onclick="closeDialog()">Cancel</button>
             <button class="abtn primary" id="pvConfirm">Confirm</button></div>
         </div>
@@ -323,8 +588,10 @@ function showPreview(p) {
 function showReceive() {
   openDialog(`
     <h2><span class="back" onclick="closeDialog()">←</span> Receive</h2>
-    <div class="frow"><label>LABEL (who is paying you? required)</label>
-      <input id="rvLbl" placeholder="e.g. alice"></div>
+    <div class="frow"><label>LABEL — WHO KNOWS THIS ADDRESS IS YOURS? (required)</label>
+      <input id="rvLbl" placeholder="e.g. alice (repaying you for pizza)"></div>
+    <p class="setp">Name the observers: everyone who will know this address belongs to you.
+      Wasabi uses these labels to warn you before a spend links people together.</p>
     <div class="drow"><button class="abtn primary" id="rvGo">Get address</button></div>`);
   $("rvGo").onclick = async () => {
     const lbl = $("rvLbl").value.trim();
@@ -349,40 +616,228 @@ function showReceive() {
 }
 
 // ---------- coinjoin --------------------------------------------------------------------
-function showCoinjoin() {
+async function showCoinjoin() {
   const np = S.coins.filter((c) => anonOf(c) < target()).reduce((a, c) => a + (c.amount || 0), 0);
+  let pays = [];
+  try { pays = (await rpc("listpaymentsincoinjoin", [], S.wallet)) || []; } catch (e) {}
+  const others = S.wallets.filter((w) => w !== S.wallet);
+  const payRows = pays.map((p) => {
+    const stArr = p.state || [];
+    const stat = (stArr[stArr.length - 1] || {}).status || "?";
+    return `<div class="payrow"><span>${fmtBtc(p.amount || 0)} BTC</span>
+      <span class="setp" style="margin:0">→ ${esc(String(p.destination || "").slice(0, 24))}… · ${esc(String(stat))}</span>
+      <span class="px" data-id="${esc(String(p.id))}" title="cancel this payment">✕</span></div>`;
+  }).join("") || `<p class="setp">none yet - a payment placed here is paid out of a coinjoin
+     round, so on-chain it never looks like a normal wallet spend.</p>`;
+
   openDialog(`
     <h2><span class="back" onclick="closeDialog()">←</span> Coinjoin</h2>
+    ${S.noCoord ? `<div class="wchip warn"><span class="wi">⚠</span><span>No coordinator configured -
+      coinjoin is disabled. <a id="cjFix" style="cursor:pointer;text-decoration:underline">Choose
+      one in Settings</a>.</span></div>` : ""}
     <div class="fact"><span class="fi">◆</span><span class="fk">Status</span>
       <span class="fv">${esc(String((S.info && S.info.coinjoinStatus) || "Idle"))}</span></div>
     <div class="fact"><span class="fi">₿</span><span class="fk">Still non-private</span>
       <span class="fv">${fmtBtc(np)} BTC</span></div>
     <div class="frow" style="margin-top:16px"><label>WALLET PASSWORD</label>
-      <input id="cjPw" type="password"></div>
+      <input id="cjPw" type="password" value="${esc(pwOf())}"></div>
+    <div class="radio">
+      <label><input type="radio" name="cjMode" value="auto" checked>
+        mix until everything reaches target ${target()}, then stop</label>
+      <label><input type="radio" name="cjMode" value="cont"> keep mixing (continuous)</label>
+    </div>
     <div class="drow">
       <button class="abtn" id="cjStop">Stop</button>
       <button class="abtn primary" id="cjStart">Start coinjoin</button>
     </div>
-    <p style="color:var(--dim);font-size:12px;margin-top:10px">
-      Start mixes until everything reaches your anonymity target (${target()}), then stops.
-      The W in the bottom bar breathes green while mixing.</p>`);
+    <div class="improve">SWEEP VIA COINJOIN</div>
+    ${others.length ? `
+      <div class="inline2"><div class="frow"><label>SWEEP EVERYTHING INTO</label>
+        <select id="cjOutW">${others.map((w) => `<option>${esc(w)}</option>`).join("")}</select></div>
+        <div class="frow" style="flex:0 0 auto;align-self:flex-end">
+          <button class="abtn" id="cjSweep">Sweep →</button></div></div>
+      <p class="setp">Coinjoins this wallet's coins and pays the outputs straight into the other
+        wallet - nothing on-chain links the two.</p>`
+      : `<p class="setp">needs a second wallet to sweep into - create one from the wallet picker.</p>`}
+    <div class="improve">PAYMENTS INSIDE COINJOIN</div>
+    ${payRows}
+    <div class="inline2">
+      <div class="frow"><label>ADDRESS</label><input id="cjPayAddr" placeholder="bc1q…" spellcheck="false"></div>
+      <div class="frow" style="flex:0 0 130px"><label>AMOUNT (BTC)</label><input id="cjPayAmt" placeholder="0.001"></div>
+      <div class="frow" style="flex:0 0 auto;align-self:flex-end">
+        <button class="abtn" id="cjPayGo">Add</button></div>
+    </div>`);
+
+  if ($("cjFix")) $("cjFix").onclick = showSettings;
   $("cjStart").onclick = async () => {
-    try { await rpc("startcoinjoin", [$("cjPw").value, true, true], S.wallet);
+    const auto = document.querySelector('input[name="cjMode"]:checked').value === "auto";
+    try { await rpc("startcoinjoin", [$("cjPw").value, auto, true], S.wallet);
           closeDialog(); toast("coinjoin started ◆"); poll(); }
-    catch (e) { toast("✗ " + e.message, true); }
+    catch (e) { toast("✗ " + e.message, true, 6000); }
   };
   $("cjStop").onclick = async () => {
     try { await rpc("stopcoinjoin", [], S.wallet); closeDialog(); toast("coinjoin stopped"); poll(); }
     catch (e) { toast("✗ " + e.message, true); }
+  };
+  if ($("cjSweep")) $("cjSweep").onclick = async () => {
+    const outw = $("cjOutW").value;
+    try { await rpc("startcoinjoinsweep", [$("cjPw").value, outw], S.wallet);
+          closeDialog(); toast(`sweep started - coins will land in ${outw} ◆`); poll(); }
+    catch (e) { toast("✗ " + e.message, true, 6000); }
+  };
+  $("cjPayGo").onclick = async () => {
+    const addr = $("cjPayAddr").value.trim();
+    const amt = Math.round(parseFloat($("cjPayAmt").value) * 1e8);
+    if (!/^(bc1|tb1|bcrt1|[13mn2])[0-9a-zA-Z]{20,90}$/.test(addr))
+      return toast("that doesn't look like a bitcoin address", true);
+    if (!amt || amt <= 0) return toast("enter a positive amount", true);
+    try { await rpc("payincoinjoin", [addr, amt], S.wallet); toast("payment queued ◆"); showCoinjoin(); }
+    catch (e) { toast("✗ " + e.message, true, 6000); }
+  };
+  document.querySelectorAll(".payrow .px").forEach((x) => {
+    x.onclick = async () => {
+      try { await rpc("cancelpaymentincoinjoin", [x.dataset.id], S.wallet);
+            toast("payment cancelled"); showCoinjoin(); }
+      catch (e) { toast("✗ " + e.message, true); }
+    };
+  });
+}
+
+// ---------- pending-tx rescue (RBF/CPFP speed up · cancel) -------------------------------
+function showTxFix(kind, tid) {
+  const speed = kind === "speed";
+  openDialog(`
+    <h2><span class="back" onclick="closeDialog()">←</span> ${speed ? "Speed up" : "Cancel"} transaction</h2>
+    <div class="fact"><span class="fi">⇄</span><span class="fk">Transaction</span>
+      <span class="fv">${esc(String(tid))}</span></div>
+    <div class="frow" style="margin-top:14px"><label>WALLET PASSWORD</label>
+      <input id="tfPw" type="password" value="${esc(pwOf())}"></div>
+    <p class="setp">${speed ? "builds + broadcasts a higher-fee replacement (RBF, or CPFP for incoming)"
+                            : "spends the funds back to yourself with a higher fee before it confirms"}</p>
+    <div class="drow"><button class="abtn" onclick="closeDialog()">Close</button>
+      <button class="abtn primary" id="tfGo">Confirm</button></div>`);
+  $("tfGo").onclick = async () => {
+    try {
+      $("tfGo").disabled = true;
+      const hx = await rpc(speed ? "speeduptransaction" : "canceltransaction",
+                           [tid, $("tfPw").value], S.wallet);
+      const r = await rpc("broadcast", [typeof hx === "string" ? hx : String(hx)]);
+      const nt = (r && r.txid) || String(r);
+      closeDialog();
+      toast((speed ? "fee bumped ✓ " : "cancelled ✓ ") + String(nt).slice(0, 16) + "…");
+      poll();
+    } catch (e) { toast("✗ " + e.message, true, 6000); $("tfGo").disabled = false; }
+  };
+}
+
+// ---------- settings (coordinator + Bitcoin Core RPC backend) ----------------------------
+function coordHost(url) {
+  let h;
+  try { h = new URL(url).host.toLowerCase(); } catch (e) { h = String(url); }
+  for (const p of ["www.", "api.", "btcpay.", "coordinator.", "coinjoin.", "wabisabi."])
+    if (h.startsWith(p)) h = h.slice(p.length);
+  return h || String(url);
+}
+
+async function showSettings() {
+  let s;
+  try { s = await api("/settings"); } catch (e) { return toast("✗ " + e.message, true); }
+  openDialog(`
+    <h2><span class="back" onclick="closeDialog()">←</span> Settings</h2>
+    <div class="improve">COINJOIN COORDINATOR</div>
+    <p class="setp">Wasabi ships without a coordinator - you choose who batches your rounds.
+      A coordinator sees coinjoin activity and sets the coordination fee; it can <b>never</b>
+      steal funds. Current:
+      <b>${s.coordinatorUri ? esc(coordHost(s.coordinatorUri)) : "none - coinjoin is disabled"}</b></p>
+    <div id="coordList"><p class="setp">… fetching live coordinators (liquisabi.com) …</p></div>
+    <div class="frow"><label>COORDINATOR URL · empty = run without one · .onion ok via the daemon's Tor</label>
+      <input id="stCoord" value="${esc(s.coordinatorUri || "")}" spellcheck="false"
+             placeholder="https://your.coordinator/"></div>
+    <div class="improve">BITCOIN CORE RPC BACKEND · OPTIONAL</div>
+    <p class="setp">If Bitcoin Core runs on this Start9 node, the daemon can fetch blocks and
+      filters from it instead of syncing from public P2P peers. Leave empty to keep P2P.</p>
+    <div class="detline"><button class="abtn" id="stDetect">Detect bitcoind</button>
+      <span id="stDetRes" class="setp" style="margin:0"></span></div>
+    <div class="inline2">
+      <div class="frow"><label>ENDPOINT (host:port)</label>
+        <input id="stRpcEp" value="${esc(s.bitcoinRpcEndPoint || "")}"
+               placeholder="bitcoind.embassy:8332" spellcheck="false"></div>
+      <div class="frow"><label>CREDENTIALS (user:password)${s.bitcoinRpcCredentialSet ? " · currently set" : ""}</label>
+        <input id="stRpcCred" type="password"
+               placeholder="${s.bitcoinRpcCredentialSet ? "unchanged" : "rpcuser:rpcpassword"}"></div>
+    </div>
+    <div id="stSaved"></div>
+    <div class="drow"><button class="abtn" onclick="closeDialog()">Close</button>
+      <button class="abtn primary" id="stSave">Save</button></div>`);
+
+  api("/coordinators").then((c) => {
+    if (!$("coordList")) return;                     // dialog was closed meanwhile
+    const rows = [], seen = new Set();
+    for (const [name, url, desc] of c.known || []) { seen.add(url); rows.push({ name, url, desc }); }
+    for (const [url, cnt] of c.live || [])
+      if (!seen.has(url)) rows.push({ name: coordHost(url), url, desc: `${cnt} public rounds / 14 days` });
+    $("coordList").innerHTML = rows.map((r) =>
+      `<div class="wrow crow" data-url="${esc(r.url)}"><span class="dot on">●</span> ${esc(r.name)}
+        <span class="setp">${esc(r.desc)}</span><span class="tag">use →</span></div>`).join("");
+    document.querySelectorAll(".crow").forEach((r) => {
+      r.onclick = () => { $("stCoord").value = r.dataset.url; };
+    });
+  }).catch(() => { if ($("coordList")) $("coordList").innerHTML = ""; });
+
+  $("stDetect").onclick = async () => {
+    $("stDetRes").textContent = "probing …";
+    try {
+      const d = await api("/detect-bitcoind");
+      if (d.found && d.found.length) {
+        $("stDetRes").textContent = "found " + d.found.join(", ") + " ✓";
+        $("stRpcEp").value = d.found[0];
+      } else $("stDetRes").textContent = "no bitcoind reachable - P2P syncing stays on";
+    } catch (e) { $("stDetRes").textContent = "probe failed: " + e.message; }
+  };
+
+  $("stSave").onclick = async () => {
+    const body = {
+      coordinatorUri: $("stCoord").value.trim(),
+      bitcoinRpcEndPoint: $("stRpcEp").value.trim(),
+    };
+    const cred = $("stRpcCred").value;
+    if (cred) body.bitcoinRpcCredentialString = cred;
+    try {
+      $("stSave").disabled = true;
+      await api("/settings", body);
+      $("stSaved").innerHTML = `<div class="wchip good"><span class="wi">✓</span>
+        <span>Saved to Config.json. <b>Restart the Sabi9 service</b> (StartOS → Sabi9 → Restart) -
+        the daemon only reads its config at startup.</span></div>`;
+      $("stSave").disabled = false;
+    } catch (e) { toast("✗ " + e.message, true, 6000); $("stSave").disabled = false; }
   };
 }
 
 // ---------- wire up -----------------------------------------------------------------------
 $("btnSend").onclick = showSend;
 $("btnReceive").onclick = showReceive;
-$("btnCoinjoin").onclick = showCoinjoin;
-$("navCoinjoin").onclick = showCoinjoin;
-$("navWallets").onclick = showWalletPicker;
+// wallet-file backup: the only backup that keeps labels + anonymity metadata.
+// (Uninstalling the service DELETES the data volume - see instructions.)
+$("btnExport").onclick = () => {
+  if (!S.wallet) return;
+  const a = document.createElement("a");
+  if (DEMO) {
+    const blob = new Blob(
+      [JSON.stringify({ demo: true, walletName: S.wallet, HdPubKeys: [] }, null, 2)],
+      { type: "application/json" });
+    a.href = URL.createObjectURL(blob);
+  } else {
+    a.href = "/export-wallet?name=" + encodeURIComponent(S.wallet);
+  }
+  a.download = S.wallet + ".json";
+  document.body.appendChild(a); a.click(); a.remove();
+  if (DEMO) URL.revokeObjectURL(a.href);
+  toast("⇓ wallet file downloading - it holds your labels and (encrypted) keys, store it like cash");
+};
+$("wCreate").onclick = showCreateWallet;
+$("wRecover").onclick = showRecoverWallet;
+$("navSettings").onclick = showSettings;
+$("search").addEventListener("focus", () => { $("search").blur(); showSettings(); });
 $("navRefresh").onclick = () => { toast("refreshing ..."); poll(); };
 $("navDiscreet").onclick = () => {
   S.discreet = !S.discreet;
@@ -390,12 +845,33 @@ $("navDiscreet").onclick = () => {
   toast(S.discreet ? "discreet mode on" : "discreet mode off");
   render();
 };
-$("mbToggle").onclick = () => (S.cjOn ? rpc("stopcoinjoin", [], S.wallet).then(poll) : showCoinjoin());
+// music box = the coinjoin control: ▶ starts auto-coinjoin with the session password,
+// falls back to the full dialog when the daemon rejects it (wrong/missing password)
+$("mbToggle").onclick = async () => {
+  if (S.cjOn) {
+    try { await rpc("stopcoinjoin", [], S.wallet); toast("coinjoin paused"); poll(); }
+    catch (e) { toast("✗ " + e.message, true); }
+    return;
+  }
+  try {
+    await rpc("startcoinjoin", [pwOf(), true, true], S.wallet);
+    toast("coinjoin started ◆  mixing until everything is private"); poll();
+  } catch (e) { showCoinjoin(); toast("✗ " + e.message, true, 5000); }
+};
 $("mbStop").onclick = () => rpc("stopcoinjoin", [], S.wallet).then(() => { toast("coinjoin stopped"); poll(); });
+$("mbMore").onclick = () => showCoinjoin();
 
 // ---------- demo mode (preview without a daemon) -------------------------------------------
+const DEMO_PAYS = [];                              // stateful: pay-in-coinjoin queue
+// ?demo=1&empty=1 -> daemon with no wallets yet (exercises the welcome flow)
+const DEMO_WALLETS = new URLSearchParams(location.search).has("empty")
+  ? [] : ["Alice's Wallet", "ColdVault"];
+const DEMO_SETTINGS = { coordinatorUri: "", bitcoinRpcEndPoint: "",
+                        bitcoinRpcCredentialSet: false, network: "Main", configFound: true };
+const DEMO_WATCHONLY = new Set();
+
 function demoRpc(method, params, wallet) {
-  const W = ["Alice's Wallet", "ColdVault"];
+  const W = DEMO_WALLETS;
   const coins = [];
   let seed = 21;
   const rnd = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31;
@@ -409,19 +885,65 @@ function demoRpc(method, params, wallet) {
       amount: (i % 3 ? -1 : 1) * (Math.round(rnd() * 5e6) + 1e5),
       label: i % 4 === 1 ? "coinjoin" : ["Person 3", "", "rent"][i % 3],
       tx: "e".repeat(64), islikelycoinjoin: i % 4 === 1 });
+  if (method === "createwallet") {
+    DEMO_WALLETS.push(params[0]);
+    return Promise.resolve(
+      "ripple lunar velvet cabin oxygen jungle mimic dawn cluster ozone crisp anchor");
+  }
+  if (method === "recoverwallet") { DEMO_WALLETS.push(params[0]); return Promise.resolve(null); }
+  if (method === "payincoinjoin") {
+    const id = "pay-" + (DEMO_PAYS.length + 1);
+    DEMO_PAYS.push({ id, amount: params[1], destination: "0014" + "ab".repeat(20),
+                     state: [{ status: "Pending" }] });
+    return Promise.resolve(id);
+  }
+  if (method === "listpaymentsincoinjoin") return Promise.resolve([...DEMO_PAYS]);
+  if (method === "cancelpaymentincoinjoin") {
+    const i = DEMO_PAYS.findIndex((p) => p.id === params[0]);
+    if (i >= 0) DEMO_PAYS.splice(i, 1);
+    return Promise.resolve(null);
+  }
   const m = {
-    getstatus: { exchangeRate: 66186, torStatus: "Running", peers: [1, 2, 3] },
+    getstatus: { exchangeRate: 66186, torStatus: "Running", peers: [1, 2, 3],
+                 bestBlockchainHeight: "956652", filtersCount: 956652, filtersLeft: 0,
+                 network: "Main" },
     listwallets: W.map((w) => ({ walletName: w })),
     getwalletinfo: { walletName: wallet, loaded: true, anonScoreTarget: 5, coinjoinStatus: "Idle",
+                     isWatchOnly: DEMO_WATCHONLY.has(wallet),
                      balance: coins.reduce((a, c) => a + c.amount, 0) },
     listunspentcoins: coins, gethistory: hist,
     getfeerates: { 2: 12, 6: 7, 144: 1 },
     getnewaddress: { address: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4" },
-    loadwallet: null, startcoinjoin: null, stopcoinjoin: null,
+    loadwallet: null, startcoinjoin: null, stopcoinjoin: null, startcoinjoinsweep: null,
     send: { txid: "d".repeat(64) },
+    broadcast: { txid: "e".repeat(64) },
+    speeduptransaction: "02000000" + "ab".repeat(60),
+    canceltransaction: "02000000" + "ab".repeat(60),
   };
   if (!(method in m)) throw new Error("demo: " + method);
   return Promise.resolve(m[method]);
+}
+
+function demoApi(path, body) {
+  if (path === "/settings" && body !== undefined) {
+    if ("coordinatorUri" in body) DEMO_SETTINGS.coordinatorUri = body.coordinatorUri;
+    if ("bitcoinRpcEndPoint" in body) DEMO_SETTINGS.bitcoinRpcEndPoint = body.bitcoinRpcEndPoint;
+    if (body.bitcoinRpcCredentialString) DEMO_SETTINGS.bitcoinRpcCredentialSet = true;
+    return Promise.resolve({ ok: true, restartRequired: true });
+  }
+  if (path === "/settings") return Promise.resolve({ ...DEMO_SETTINGS });
+  if (path === "/coordinators") return Promise.resolve({
+    known: [["coinjoin.nl", "https://coinjoin.nl/", "this project's coordinator"],
+            ["kruw.io", "https://coinjoin.kruw.io/", "well-known, long-running"]],
+    live: [["https://coinjoin.kruw.io/", 1243], ["https://wasabist.example/", 87]],
+  });
+  if (path === "/detect-bitcoind") return Promise.resolve({ found: ["bitcoind.embassy:8332"] });
+  if (path === "/import-skeleton") {
+    if (!/xpub|zpub|ExtPubKey/.test(String(body.skeleton))) return Promise.reject(new Error("demo: no key found"));
+    DEMO_WALLETS.push(body.name); DEMO_WATCHONLY.add(body.name);
+    return Promise.resolve({ ok: true, name: body.name });
+  }
+  return Promise.reject(new Error("demo api: " + path));
 }
 
 // go

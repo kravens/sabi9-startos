@@ -2,12 +2,15 @@
 # sabi9d - Sabi9 web daemon: serves the UI and proxies JSON-RPC to the local
 # Wasabi daemon (127.0.0.1:37128). Pure stdlib. The UI port (55569) is exposed
 # through StartOS interfaces; the RPC port never leaves the container.
-import json, os, re, sys, urllib.request, urllib.parse
+import json, os, re, socket, sys, time, urllib.request, urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 UI_PORT = int(os.environ.get("SABI9_PORT", "55569"))
 RPC_URL = os.environ.get("SABI9_RPC", "http://127.0.0.1:37128")
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+# both subcontainers mount the 'main' volume at /data, so the web daemon can
+# edit the Wasabi config directly (daemon only reads it at startup -> restart)
+WASABI_CFG = os.path.join(os.environ.get("HOME", "/data"), ".walletwasabi", "client", "Config.json")
 MIME = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
         ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png",
         ".json": "application/json", ".woff2": "font/woff2"}
@@ -140,6 +143,197 @@ ALLOWED = {"getstatus", "listwallets", "loadwallet", "getwalletinfo", "listunspe
            "listpaymentsincoinjoin", "cancelpaymentincoinjoin", "excludefromcoinjoin",
            "speeduptransaction", "canceltransaction", "createwallet", "recoverwallet"}
 
+# ---- settings (Config.json) ----------------------------------------------------------
+# Wasabi ships WITHOUT a coordinator - the user picks one they trust (it batches the
+# rounds, sees coinjoin activity and sets the coordination fee; it can never steal
+# funds). Same model as sabi.py's coordinator picker.
+KNOWN_COORDINATORS = [
+    ("coinjoin.nl", "https://coinjoin.nl/",      "this project's coordinator"),
+    ("kruw.io",     "https://coinjoin.kruw.io/", "well-known, long-running"),
+]
+LIQUISABI_API = "http://liquisabi.com/api"        # public round aggregator (as sabi.py)
+# Start9 service hostnames a local Bitcoin Core would answer on (probe, never assume)
+BITCOIND_CANDIDATES = (("bitcoind.embassy", 8332), ("bitcoind.startos", 8332),
+                       ("bitcoind", 8332))
+
+def read_wasabi_config():
+    try:
+        with open(WASABI_CFG, encoding="utf-8-sig") as f:   # tolerate Wasabi's UTF-8 BOM
+            return json.load(f)
+    except Exception:
+        return {}
+
+def edit_wasabi_config(updates):
+    # edit ONLY the given keys: 2.8.0's strict loader deletes and re-defaults a
+    # Config.json it cannot fully decode, so never write a fresh/partial file here
+    cfg = read_wasabi_config()
+    if not cfg:
+        raise RuntimeError("Config.json not found - has the Wasabi daemon booted once?")
+    cfg.update(updates)
+    with open(WASABI_CFG, "w", encoding="utf-8") as f:      # write WITHOUT a BOM
+        json.dump(cfg, f, indent=2)
+
+def norm_coord_uri(s):                            # user text -> URI for Config.json (None = invalid)
+    s = (s or "").strip()
+    if s.lower() in ("", "none", "off", "clear"):
+        return ""                                 # explicit: run without a coordinator
+    if "://" not in s:
+        s = "https://" + s
+    try:
+        u = urllib.parse.urlparse(s)
+        host, _ = u.hostname, u.port              # .port raises on a malformed port
+    except ValueError:
+        return None
+    if u.scheme not in ("http", "https") or not host: return None
+    if not re.fullmatch(r"[a-z0-9]([a-z0-9.-]*[a-z0-9])?", host): return None
+    if host.endswith("wasabiwallet.io"): return None   # daemon rejects the old zkSNACKs host
+    return s if s.endswith("/") else s + "/"
+
+_coord_cache = {"t": 0.0, "live": []}
+def live_coordinators(days=14, n=100, timeout=8):
+    # coordinators with recent PUBLIC rounds (best effort, cached 10 min). Carries no
+    # wallet data - it is the same generic dashboard query sabi.py/txflow.py make.
+    if time.monotonic() - _coord_cache["t"] < 600:
+        return _coord_cache["live"]
+    import datetime
+    now = datetime.datetime.now(datetime.timezone.utc)
+    body = json.dumps({"jsonrpc": "2.0", "id": "1", "method": "dashboard", "params": {
+        "since": (now - datetime.timedelta(days=days)).isoformat(), "until": now.isoformat(),
+        "page": 1, "pageSize": n, "orderBy": "RoundEndTime", "descending": True,
+        "searchTerm": ""}})
+    req = urllib.request.Request(LIQUISABI_API, data=body.encode(),
+        headers={"Content-Type": "text/plain;charset=UTF-8", "User-Agent": "sabi9/1.0",
+                 "Origin": "http://liquisabi.com", "Referer": "http://liquisabi.com/"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        resp = json.loads(r.read().decode())
+    rounds = ((resp.get("result") or resp).get("PaginatedRounds") or {}).get("Rounds") or []
+    seen = {}
+    for rd in rounds:
+        ep = str(rd.get("CoordinatorEndpoint") or "").strip()
+        if ep: seen[ep] = seen.get(ep, 0) + 1
+    live = sorted(seen.items(), key=lambda kv: -kv[1])
+    _coord_cache["t"], _coord_cache["live"] = time.monotonic(), live
+    return live
+
+# ---- hardware-wallet skeleton import (ColdCard / SeedSigner, fully offline) ----------
+# There is no wassabeed RPC for this: like Wasabi Desktop we create the watch-only
+# wallet FILE ourselves, in the daemon's Wallets directory (same 'main' volume).
+_B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+def _b58decode_check(s):
+    import hashlib
+    n = 0
+    for ch in s:
+        n = n * 58 + _B58.index(ch)
+    raw = n.to_bytes((n.bit_length() + 7) // 8, "big")
+    raw = b"\x00" * (len(s) - len(s.lstrip("1"))) + raw
+    data, chk = raw[:-4], raw[-4:]
+    if hashlib.sha256(hashlib.sha256(data).digest()).digest()[:4] != chk:
+        raise ValueError("bad base58 checksum")
+    return data
+
+def _b58encode_check(data):
+    import hashlib
+    data = data + hashlib.sha256(hashlib.sha256(data).digest()).digest()[:4]
+    n = int.from_bytes(data, "big")
+    out = ""
+    while n:
+        n, r = divmod(n, 58)
+        out = _B58[r] + out
+    return "1" * (len(data) - len(data.lstrip(b"\x00"))) + out
+
+# SLIP-132 version bytes -> the plain xpub/tpub Wasabi expects
+_XPUB_VERS = {
+    bytes.fromhex("0488b21e"): bytes.fromhex("0488b21e"),  # xpub
+    bytes.fromhex("049d7cb2"): bytes.fromhex("0488b21e"),  # ypub
+    bytes.fromhex("04b24746"): bytes.fromhex("0488b21e"),  # zpub
+    bytes.fromhex("043587cf"): bytes.fromhex("043587cf"),  # tpub
+    bytes.fromhex("044a5262"): bytes.fromhex("043587cf"),  # upub
+    bytes.fromhex("045f1cf6"): bytes.fromhex("043587cf"),  # vpub
+}
+
+def normalize_xpub(s):
+    data = _b58decode_check(str(s).strip())
+    if len(data) != 78: raise ValueError("extended key must be 78 bytes")
+    to = _XPUB_VERS.get(data[:4])
+    if to is None: raise ValueError("unknown extended-key version (want xpub/ypub/zpub/tpub)")
+    return _b58encode_check(to + data[4:])
+
+def parse_skeleton(req):
+    # returns (xpub, fingerprint). Accepts: ColdCard Wasabi skeleton
+    # {ExtPubKey, MasterFingerprint}; ColdCard generic export {xfp, bip84:{xpub|_pub}};
+    # or bare fields from the form (SeedSigner shows xpub + fingerprint as text).
+    sk = req.get("skeleton")
+    if isinstance(sk, str) and sk.strip():
+        try: sk = json.loads(sk)
+        except ValueError:
+            sk = {"ExtPubKey": sk}                 # raw xpub pasted straight in
+    sk = sk if isinstance(sk, dict) else {}
+    xpub = (sk.get("ExtPubKey") or (sk.get("bip84") or {}).get("xpub")
+            or (sk.get("bip84") or {}).get("_pub") or req.get("extPubKey") or "")
+    fp = (sk.get("MasterFingerprint") or sk.get("xfp")
+          or req.get("masterFingerprint") or "")
+    xpub = normalize_xpub(xpub)
+    fp = str(fp).strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{8}", fp):
+        raise ValueError("master fingerprint must be 8 hex characters (e.g. 0f056943)")
+    return xpub, fp
+
+WALLET_NAME_RE = r"[A-Za-z0-9][A-Za-z0-9 _\-]{0,39}"   # filename-safe, no traversal
+
+def import_skeleton(name, xpub, fp):
+    name = str(name or "").strip()
+    if not re.fullmatch(WALLET_NAME_RE, name):
+        raise ValueError("wallet name: letters, digits, space, - _ (max 40)")
+    wdir = os.path.join(os.path.dirname(WASABI_CFG), "Wallets")
+    os.makedirs(wdir, exist_ok=True)
+    path = os.path.join(wdir, name + ".json")
+    if os.path.exists(path): raise ValueError(f"wallet '{name}' already exists")
+    network = read_wasabi_config().get("Network", "Main")
+    testnet = str(network).lower() != "main"
+    wallet = {                                     # 2.8.0 watch-only KeyManager shape
+        "EncryptedSecret": None,
+        "ChainCode": None,
+        "MasterFingerprint": fp,
+        "ExtPubKey": xpub,
+        "SkipSynchronization": False,
+        "MinGapLimit": 21,
+        "AccountKeyPath": "84'/1'/0'" if testnet else "84'/0'/0'",
+        "TaprootAccountKeyPath": "86'/1'/0'" if testnet else "86'/0'/0'",
+        # SegWit activation height: no P2WPKH history can predate it
+        "BlockchainState": {"Network": network, "Height": "481824" if not testnet else "0"},
+        "PreferPsbtWorkflow": True,
+        "AutoCoinJoin": False,
+        "PlebStopThreshold": "0.01",
+        "Icon": None,
+        "AnonScoreTarget": 5,
+        "FeeRateMedianTimeFrame": 0,
+        "IsCoinjoinProfileSelected": False,
+        "RedCoinIsolation": False,
+        "ExcludedCoinsFromCoinJoin": [],
+        "HdPubKeys": [],
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(wallet, f, indent=2)
+    return name
+
+def detect_bitcoind():
+    # fixed candidate list + the configured endpoint - no arbitrary host:port from the
+    # client, so the unauthenticated UI cannot be used as a port scanner
+    cand = list(BITCOIND_CANDIDATES)
+    ep = str(read_wasabi_config().get("BitcoinRpcEndPoint") or "").strip()
+    if ep and ":" in ep:
+        host, _, port = ep.rpartition(":")
+        if port.isdigit(): cand.insert(0, (host, int(port)))
+    found = []
+    for host, port in cand:
+        try:
+            with socket.create_connection((host, port), timeout=1.5):
+                found.append(f"{host}:{port}")
+        except OSError:
+            pass
+    return found
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "sabi9/1.0"
     def log_message(self, fmt, *args):                # quiet: no per-request noise, no addresses
@@ -159,6 +353,42 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         if path == "/health":
             return self._send(200, {"ok": True})
+        if path == "/settings":
+            cfg = read_wasabi_config()
+            return self._send(200, {
+                "coordinatorUri": cfg.get("CoordinatorUri", ""),
+                "bitcoinRpcEndPoint": cfg.get("BitcoinRpcEndPoint", ""),
+                "bitcoinRpcCredentialSet": bool(cfg.get("BitcoinRpcCredentialString")),
+                "network": cfg.get("Network", "Main"),
+                "configFound": bool(cfg),
+            })
+        if path == "/coordinators":
+            try: live = live_coordinators()
+            except Exception: live = []
+            return self._send(200, {"known": KNOWN_COORDINATORS, "live": live})
+        if path == "/detect-bitcoind":
+            return self._send(200, {"found": detect_bitcoind()})
+        if path == "/export-wallet":
+            # download the wallet FILE - the only backup that keeps labels + anonymity
+            # metadata (recovery words alone restore funds, not privacy state). Hot
+            # wallets carry only the password-encrypted secret, like Wasabi Desktop's
+            # file backup; the UI's whole threat model already assumes LAN/Tor access.
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            name = (q.get("name") or [""])[0].strip()
+            if not re.fullmatch(WALLET_NAME_RE, name):
+                return self._send(400, {"error": "bad wallet name"})
+            p = os.path.join(os.path.dirname(WASABI_CFG), "Wallets", name + ".json")
+            if not os.path.isfile(p):
+                return self._send(404, {"error": f"no wallet file for '{name}'"})
+            data = open(p, "rb").read()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Disposition", f'attachment; filename="{name}.json"')
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if path == "/qr":
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             text = (q.get("text") or [""])[0][:200]
@@ -174,6 +404,40 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
+        if path == "/import-skeleton":
+            try:
+                ln = int(self.headers.get("Content-Length") or 0)
+                req = json.loads(self.rfile.read(min(ln, 1_000_000)).decode() or "{}")
+                xpub, fp = parse_skeleton(req)
+                name = import_skeleton(req.get("name"), xpub, fp)
+                return self._send(200, {"ok": True, "name": name})
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except Exception as e:
+                return self._send(502, {"error": str(e) or type(e).__name__})
+        if path == "/settings":
+            try:
+                ln = int(self.headers.get("Content-Length") or 0)
+                req = json.loads(self.rfile.read(min(ln, 100_000)).decode() or "{}")
+                upd = {}
+                if "coordinatorUri" in req:
+                    uri = norm_coord_uri(str(req["coordinatorUri"] or ""))
+                    if uri is None:
+                        return self._send(400, {"error": "invalid coordinator URI"})
+                    upd["CoordinatorUri"] = uri
+                if "bitcoinRpcEndPoint" in req:
+                    ep = str(req["bitcoinRpcEndPoint"] or "").strip()
+                    if ep and not re.fullmatch(r"[A-Za-z0-9._\-]+(:\d{1,5})?", ep):
+                        return self._send(400, {"error": "endpoint must look like host:port"})
+                    upd["BitcoinRpcEndPoint"] = ep
+                if "bitcoinRpcCredentialString" in req:
+                    upd["BitcoinRpcCredentialString"] = str(req["bitcoinRpcCredentialString"] or "")
+                if not upd:
+                    return self._send(400, {"error": "nothing to save"})
+                edit_wasabi_config(upd)
+                return self._send(200, {"ok": True, "restartRequired": True})
+            except Exception as e:
+                return self._send(502, {"error": str(e) or type(e).__name__})
         if path != "/rpc":
             return self._send(404, {"error": "not found"})
         try:

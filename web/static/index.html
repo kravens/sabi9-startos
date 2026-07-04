@@ -15,27 +15,62 @@
 </svg>
 
 <nav id="sidebar">
-  <svg class="logo" viewBox="0 0 75 57"><use href="#wasabiW-use"/></svg>
-  <button class="sbtn active" id="navWallet">▤<span class="tip">Wallet</span></button>
-  <button class="sbtn" id="navCoinjoin">◆<span class="tip">Coinjoin</span></button>
-  <button class="sbtn" id="navWallets">▣<span class="tip">Switch wallet</span></button>
+  <div id="sbBrand"><svg class="logo" viewBox="0 0 75 57"><use href="#wasabiW-use"/></svg>
+    <span>Sabi9</span></div>
+  <div id="sbHead">WALLETS</div>
+  <div id="sbWallets"></div>
   <div class="spacer"></div>
-  <button class="sbtn" id="navRefresh">⟳<span class="tip">Refresh</span></button>
-  <button class="sbtn" id="navDiscreet">◎<span class="tip">Discreet Mode</span></button>
+  <div id="sbTools">
+    <button class="sbtn" id="navRefresh">⟳<span class="tip">Refresh</span></button>
+    <button class="sbtn" id="navDiscreet">◎<span class="tip">Discreet Mode</span></button>
+    <button class="sbtn" id="navSettings">⚙<span class="tip">Settings</span></button>
+  </div>
 </nav>
 
 <div id="shell">
-  <div id="topbar"><input id="search" placeholder="Search settings / advanced features"></div>
+  <div id="topbar"><input id="search" placeholder="Search settings / advanced features">
+    <div id="statusline"></div></div>
 
   <main id="main">
     <div id="syncNote" class="hidden"></div>
 
+    <div id="welcome" class="hidden">
+      <svg class="wlogo" viewBox="0 0 75 57"><use href="#wasabiW-use"/></svg>
+      <h1>Welcome to Sabi9</h1>
+      <p class="wsub">Wasabi Wallet on your own node — coins come in, get coinjoined
+        private, and leave without a trace. Here is the whole flow:</p>
+      <div id="wSteps">
+        <div class="wstep"><span class="wnum">1</span><span class="wico">⇲</span>
+          <h5>Receive</h5><p>Generate an address (with a label of who is paying) and show
+          it as a QR to scan. One address, one use — never reused.</p></div>
+        <div class="wstep"><span class="wnum">2</span><span class="wico">◆</span>
+          <h5>Coinjoin</h5><p>Press ▶ on the music box at the bottom of the screen — your
+          coins are mixed with everyone else's until they are private, then it stops by
+          itself.</p></div>
+        <div class="wstep"><span class="wnum">3</span><span class="wico">⇱</span>
+          <h5>Send</h5><p>Every send opens a preview with privacy warnings and no-change
+          suggestions before anything is signed.</p></div>
+      </div>
+      <div class="wcta">
+        <button class="abtn primary" id="wCreate">＋ Create a new wallet</button>
+        <button class="abtn" id="wRecover">⟳ Recover from backup</button>
+      </div>
+      <p class="wnote">Creating a wallet gives you 12 recovery words and asks for a password —
+        <b>both together</b> are the only way to restore it. Write them down, in separate places.</p>
+    </div>
+
+    <div id="emptyState" class="hidden">
+      <p>Select a wallet in the sidebar to begin — a wallet stays locked until you open it.</p>
+    </div>
+
+    <div id="dashboard" class="hidden">
     <div id="walletHead">
       <span id="walletTitle">—</span>
       <span class="grow"></span>
       <button class="abtn primary" id="btnSend">⇱ Send</button>
       <button class="abtn" id="btnReceive">⇲ Receive</button>
-      <button class="abtn" id="btnCoinjoin">◆ Coinjoin</button>
+      <button class="abtn" id="btnExport"
+        title="Download this wallet's file - the full backup incl. labels and privacy metadata">⇓</button>
     </div>
 
     <section id="cards">
@@ -65,6 +100,7 @@
 
     <div id="txhead"><h3>Transactions</h3><span class="cnt" id="txCount"></span></div>
     <table id="txs"><tbody id="txBody"></tbody></table>
+    </div><!-- /dashboard -->
   </main>
 </div>
 
@@ -74,8 +110,9 @@
     <div id="mbStatus">—</div>
     <div id="mbSub"></div>
   </div>
-  <button class="mbtn" id="mbToggle">Start</button>
+  <button class="mbtn play" id="mbToggle" title="Start / pause auto-coinjoin">▶</button>
   <button class="mbtn" id="mbStop" title="Stop coinjoin">■</button>
+  <button class="mbtn" id="mbMore" title="Coinjoin options: sweep, payments, modes">⋯</button>
 </div>
 
 <div id="overlay" class="hidden"><div class="dialog" id="dialog"></div></div>
