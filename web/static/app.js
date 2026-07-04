@@ -213,19 +213,29 @@ function render() {
   // music box: green pulse while in a round, amber pulse while signing/broadcasting
   const mb = $("musicbox");
   mb.classList.remove("hidden");
+  // watch-only wallets have no key chain: startcoinjoin throws an UNHANDLED
+  // exception that crashes the whole daemon (SIGABRT). Never let it fire.
+  // (wo declared above for the walletTitle badge)
   const cjs2 = String((S.info && S.info.coinjoinStatus) || "");
   const critical = S.cjOn && /critical/i.test(cjs2);
-  mb.classList.toggle("mixing", S.cjOn && !critical);
+  mb.classList.toggle("mixing", S.cjOn && !critical && !wo);
   mb.classList.toggle("critical", critical);
-  $("mbStatus").textContent = S.cjOn
-    ? (critical ? "Signing the coinjoin - do not stop the service"
-                : "Awaiting other participants")
-    : "Coinjoin is idle";
   const np = S.coins.filter((c) => anonOf(c) < target())
                     .reduce((a, c) => a + (c.amount || 0), 0);
-  $("mbSub").textContent = S.cjOn ? `mixing · ${fmtBtc(np)} BTC still non-private`
-    : (np ? `${fmtBtc(np)} BTC could be made private - press ▶` : "everything is private ◆");
+  if (wo) {
+    $("mbStatus").textContent = "Watch-only wallet - coinjoin needs private keys";
+    $("mbSub").textContent = "sign and coinjoin from its hot counterpart";
+  } else {
+    $("mbStatus").textContent = S.cjOn
+      ? (critical ? "Signing the coinjoin - do not stop the service"
+                  : "Awaiting other participants")
+      : "Coinjoin is idle";
+    $("mbSub").textContent = S.cjOn ? `mixing · ${fmtBtc(np)} BTC still non-private`
+      : (np ? `${fmtBtc(np)} BTC could be made private - press ▶` : "everything is private ◆");
+  }
   $("mbToggle").textContent = S.cjOn ? "⏸" : "▶";
+  $("mbToggle").disabled = busy || wo;
+  $("mbStop").disabled = busy || wo;
 }
 
 const esc = (s) => s.replace(/[&<>"']/g, (m) =>
@@ -685,6 +695,16 @@ function showReceive() {
 
 // ---------- coinjoin --------------------------------------------------------------------
 async function showCoinjoin() {
+  // watch-only wallet has no key chain: starting coinjoin crashes the daemon.
+  if (S.info && S.info.isWatchOnly) {
+    openDialog(`
+      <h2><span class="back" onclick="closeDialog()">←</span> Coinjoin</h2>
+      <div class="wchip warn"><span class="wi">◇</span><span><b>${esc(S.wallet)}</b> is a
+        watch-only wallet - it holds no private keys, so it cannot coinjoin or spend.
+        Open its hot counterpart (the wallet the seed is on) to coinjoin.</span></div>
+      <div class="drow"><button class="abtn primary" onclick="closeDialog()">OK</button></div>`);
+    return;
+  }
   const np = S.coins.filter((c) => anonOf(c) < target()).reduce((a, c) => a + (c.amount || 0), 0);
   let pays = [];
   try { pays = (await rpc("listpaymentsincoinjoin", [], S.wallet)) || []; } catch (e) {}
@@ -1004,6 +1024,8 @@ $("navDiscreet").onclick = () => {
 // music box = the coinjoin control: ▶ starts auto-coinjoin with the session password,
 // falls back to the full dialog when the daemon rejects it (wrong/missing password)
 $("mbToggle").onclick = async () => {
+  // never start coinjoin on a watch-only wallet - it crashes the daemon
+  if (S.info && S.info.isWatchOnly && !S.cjOn) return showCoinjoin();
   if (S.cjOn) {
     try { await rpc("stopcoinjoin", [], S.wallet); toast("coinjoin paused"); poll(); }
     catch (e) { toast("✗ " + friendly(e), true); }

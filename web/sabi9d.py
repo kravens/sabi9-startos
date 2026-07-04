@@ -404,6 +404,11 @@ def restore_wallet_file(name, obj):
         for k in ("Height", "BirthHeight"):
             v = bs.get(k)
             if isinstance(v, str) and v.isdigit(): bs[k] = int(v)
+    # a watch-only wallet has no key chain -> coinjoin throws an UNHANDLED
+    # exception that SIGABRTs the whole daemon. Force AutoCoinJoin off so a
+    # restored watch-only wallet can never auto-start a round on load.
+    if not obj.get("EncryptedSecret"):
+        obj["AutoCoinJoin"] = False
     name, path = _wallet_path_for(name)
     _write_wallet(path, obj)
     return name
