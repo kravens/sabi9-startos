@@ -5,19 +5,20 @@ import { uiPort, rpcPort } from './utils'
 export const main = sdk.setupMain(async ({ effects }) => {
   console.info(i18n('Starting Sabi9 (Wasabi daemon + web UI)'))
 
-  const mounts = sdk.Mounts.of().mountVolume({
-    volumeId: 'main',
-    subpath: null,
-    mountpoint: '/data',
-    readonly: false,
-  })
+  const mkMounts = () =>
+    sdk.Mounts.of().mountVolume({
+      volumeId: 'main',
+      subpath: null,
+      mountpoint: '/data',
+      readonly: false,
+    })
 
   return sdk.Daemons.of(effects)
     .addDaemon('wasabi', {
-      subcontainer: sdk.SubContainer.of(
+      subcontainer: await sdk.SubContainer.of(
         effects,
         { imageId: 'main' },
-        mounts,
+        mkMounts(),
         'wasabi-sub',
       ),
       // wasabi-start.sh writes /data/.walletwasabi/client/Config.json (RPC enabled,
@@ -34,10 +35,10 @@ export const main = sdk.setupMain(async ({ effects }) => {
       requires: [],
     })
     .addDaemon('web', {
-      subcontainer: sdk.SubContainer.of(
+      subcontainer: await sdk.SubContainer.of(
         effects,
         { imageId: 'main' },
-        mounts,
+        mkMounts(),
         'web-sub',
       ),
       exec: { command: ['python3', '/opt/sabi9/sabi9d.py'] },

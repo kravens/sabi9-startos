@@ -1,14 +1,11 @@
 {
+  "include": ["startos/**/*.ts", "node_modules/**/startos"],
   "compilerOptions": {
-    "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "strict": true,
+    "target": "ES2018",
+    "module": "CommonJS",
+    "moduleResolution": "node",
     "esModuleInterop": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
-    "outDir": "dist",
-    "rootDir": "."
-  },
-  "include": ["startos/**/*.ts"]
+    "strict": true,
+    "skipLibCheck": true
+  }
 }

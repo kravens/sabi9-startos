@@ -1,0 +1,10 @@
+.git
+.gitmodules
+node_modules
+javascript
+startos
+*.s9pk
+docker-images
+ncc-cache
+**/__pycache__
+**/*.pyc

@@ -1,8 +1,11 @@
+/**
+ * Plumbing. DO NOT EDIT.
+ */
+export { createBackup } from './backups'
 export { main } from './main'
-export { setInterfaces } from './interfaces'
-export { setDependencies } from './dependencies'
-export { createBackup, restoreBackup } from './backups'
-export { packageInit, packageUninit, containerInit } from './init'
-export { versionGraph } from './versions'
-export { manifest } from './manifest'
-export const actions = {}
+export { init, uninit } from './init'
+export { actions } from './actions'
+import { buildManifest } from '@start9labs/start-sdk'
+import { manifest as sdkManifest } from './manifest'
+import { versionGraph } from './versions'
+export const manifest = buildManifest(versionGraph, sdkManifest)

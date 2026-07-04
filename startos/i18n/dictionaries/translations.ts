@@ -1,1 +1,4 @@
-export const translations = {} as Record<string, Record<string, string>>
+import { LangDict } from './default'
+
+// English-only for now; add locales here keyed by the numbers in default.ts.
+export default {} satisfies Record<string, LangDict>

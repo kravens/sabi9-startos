@@ -1,6 +1,4 @@
-# Sabi9 - StartOS package build.
-# The real build logic ships in the SDK's s9pk.mk (from node_modules); this
-# Makefile just includes it, per the packaging guide. Build with:
-#   npm install && make            # -> sabi9_x86_64.s9pk / sabi9_aarch64.s9pk
-#   make install                   # sideload to the StartOS box in ~/.startos/config.yaml
-include node_modules/@start9labs/start-sdk/s9pk.mk
+# Wasabi ships linux builds for x86_64 and aarch64 only (no riscv), so restrict
+# the build matrix. Overrides to s9pk.mk must precede the include statement.
+ARCHES := x86 arm
+include s9pk.mk

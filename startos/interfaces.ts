@@ -3,12 +3,10 @@ import { sdk } from './sdk'
 import { uiPort } from './utils'
 
 export const setInterfaces = sdk.setupInterfaces(async ({ effects }) => {
-  const multi = sdk.MultiHost.of(effects, 'ui')
-  const origin = await multi.bindPort(uiPort, {
+  const uiMulti = sdk.MultiHost.of(effects, 'ui-multi')
+  const uiMultiOrigin = await uiMulti.bindPort(uiPort, {
     protocol: 'http',
-    preferredExternalPort: uiPort,
   })
-
   const ui = sdk.createInterface(effects, {
     name: i18n('Sabi9 Web Interface'),
     id: 'ui',
@@ -23,5 +21,7 @@ export const setInterfaces = sdk.setupInterfaces(async ({ effects }) => {
     query: {},
   })
 
-  return [await origin.export([ui])]
+  const uiReceipt = await uiMultiOrigin.export([ui])
+
+  return [uiReceipt]
 })
