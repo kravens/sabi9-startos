@@ -1,0 +1,5 @@
+# The container runs on Linux - every text file must use LF, never CRLF.
+# A CRLF wasabi-start.sh would fail with "bad interpreter: /bin/sh^M".
+* text=auto eol=lf
+*.png binary
+*.svg text eol=lf
