@@ -1,0 +1,13 @@
+{
+  "name": "sabi9-startos",
+  "version": "2.8.0",
+  "description": "Wasabi Wallet daemon with the Sabi9 web interface, packaged for StartOS",
+  "license": "MIT",
+  "scripts": {
+    "build": "make"
+  },
+  "devDependencies": {
+    "@start9labs/start-sdk": "^0.4.0",
+    "typescript": "^5.5.0"
+  }
+}

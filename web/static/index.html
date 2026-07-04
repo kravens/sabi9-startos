@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sabi9 · Wasabi Wallet</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+</head>
+<body>
+
+<svg id="wasabiW" style="display:none" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 75 57">
+  <path d="M53.4227 26.9681C46.331 16.2741 43.7272 5.86066 42.672 0C38.4243 2.58412 34.172 5.16824 29.9198 7.75689C31.1379 12.8527 33.4384 20.4286 37.9352 28.7059H24.6984C24.2954 28.1402 23.8969 27.5655 23.5029 26.9681C16.4113 16.2741 13.8074 5.86066 12.7522 0C8.49999 2.58412 4.25226 5.16824 0 7.75689C1.56686 14.3281 4.93153 25.0221 12.4941 36.0329C19.9843 46.9351 28.3801 53.47 33.7192 57C37.2242 53.6556 40.7248 50.3112 44.2298 46.9622C41.7935 45.4959 38.4243 43.2331 34.7472 39.9566H45.294C51.9826 48.5371 58.9791 53.9135 63.639 56.9955C67.144 53.6511 70.6445 50.3066 74.1496 46.9577C71.7133 45.4914 68.3441 43.2286 64.6669 39.952H74.1496V28.6969H54.6182C54.2152 28.1312 53.8167 27.5564 53.4227 26.959V26.9681Z"/>
+  <path d="M74.3622 0.0454102H59.957V14.4414H74.3622V0.0454102Z"/>
+</svg>
+
+<nav id="sidebar">
+  <svg class="logo" viewBox="0 0 75 57"><use href="#wasabiW-use"/></svg>
+  <button class="sbtn active" id="navWallet">▤<span class="tip">Wallet</span></button>
+  <button class="sbtn" id="navCoinjoin">◆<span class="tip">Coinjoin</span></button>
+  <button class="sbtn" id="navWallets">▣<span class="tip">Switch wallet</span></button>
+  <div class="spacer"></div>
+  <button class="sbtn" id="navRefresh">⟳<span class="tip">Refresh</span></button>
+  <button class="sbtn" id="navDiscreet">◎<span class="tip">Discreet Mode</span></button>
+</nav>
+
+<div id="shell">
+  <div id="topbar"><input id="search" placeholder="Search settings / advanced features"></div>
+
+  <main id="main">
+    <div id="syncNote" class="hidden"></div>
+
+    <div id="walletHead">
+      <span id="walletTitle">—</span>
+      <span class="grow"></span>
+      <button class="abtn primary" id="btnSend">⇱ Send</button>
+      <button class="abtn" id="btnReceive">⇲ Receive</button>
+      <button class="abtn" id="btnCoinjoin">◆ Coinjoin</button>
+    </div>
+
+    <section id="cards">
+      <div class="card">
+        <h4>BALANCE</h4>
+        <div class="amount" id="cBalance">— <span class="btc">BTC</span></div>
+        <div class="sub" id="cBalanceUsd">≈ —</div>
+      </div>
+      <div class="card">
+        <h4>PRIVACY PROGRESS</h4>
+        <div class="shieldline">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#8bc34a" stroke-width="2">
+            <path d="M12 2l8 3v6c0 5-3.5 9-8 11-4.5-2-8-6-8-11V5l8-3z"/>
+            <path d="M9 12l2 2 4-4" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span id="cPriv">— %</span>
+        </div>
+        <div id="privBar"><div id="privFill"></div></div>
+        <span class="badge">PRIVATE <b id="cPrivBtc">—</b></span>
+      </div>
+      <div class="card">
+        <h4>EXCHANGE RATE</h4>
+        <div class="amount" id="cRate">— <span class="btc">USD</span></div>
+        <div class="sub">per BTC · from your daemon</div>
+      </div>
+    </section>
+
+    <div id="txhead"><h3>Transactions</h3><span class="cnt" id="txCount"></span></div>
+    <table id="txs"><tbody id="txBody"></tbody></table>
+  </main>
+</div>
+
+<div id="musicbox" class="hidden">
+  <svg class="wlogo" viewBox="0 0 75 57"><use href="#wasabiW-use"/></svg>
+  <div style="flex:1">
+    <div id="mbStatus">—</div>
+    <div id="mbSub"></div>
+  </div>
+  <button class="mbtn" id="mbToggle">Start</button>
+  <button class="mbtn" id="mbStop" title="Stop coinjoin">■</button>
+</div>
+
+<div id="overlay" class="hidden"><div class="dialog" id="dialog"></div></div>
+<div id="toast" class="hidden"></div>
+
+<script>
+// clone the hidden Wasabi W into a reusable symbol
+const src = document.getElementById('wasabiW');
+src.outerHTML = '<svg style="display:none" xmlns="http://www.w3.org/2000/svg">' +
+  '<symbol id="wasabiW-use" viewBox="0 0 75 57">' + src.innerHTML + '</symbol></svg>';
+</script>
+<script src="app.js"></script>
+</body>
+</html>
