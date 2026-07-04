@@ -416,7 +416,7 @@ function showImportRestart(name) {
   $("irGo").onclick = async () => {
     try {
       $("irGo").disabled = true;
-      await api("/restart-daemon");
+      await api("/restart-daemon", {});    // body -> POST (GET would 404)
       closeDialog();
       toast("service restarting ⟳ - '" + name + "' appears in the sidebar when the app reconnects", false, 8000);
     } catch (e) { toast("✗ " + friendly(e), true, 7000); $("irGo").disabled = false; }
@@ -979,7 +979,7 @@ async function showSettings(tab = "coordinator") {
       $("stRestart").onclick = async () => {
         try {
           $("stRestart").disabled = true;
-          await api("/restart-daemon");
+          await api("/restart-daemon", {});    // body -> POST (GET would 404)
           closeDialog();
           toast("service restarting with the new settings ⟳ - the app reconnects shortly", false, 8000);
         } catch (e) { toast("✗ " + friendly(e), true, 6000); $("stRestart").disabled = false; }
