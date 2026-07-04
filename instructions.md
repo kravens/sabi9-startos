@@ -113,7 +113,8 @@ Three layers, strongest first:
    open wallet's `.json` to your computer. It contains your address labels and
    anonymity scores plus the password-encrypted secret (hot wallets) or just
    the xpub (watch-only) - the same file Wasabi Desktop backs up. Store it
-   like cash.
+   like cash. Restore it later via **＋ Add wallet → Import / restore wallet
+   file** - it comes back exactly as it was.
 3. **Recovery words + password** - restore your *funds* anywhere, but **not**
    your labels or anonymity metadata: the restored wallet no longer knows
    which coins were coinjoined or who knows which address. Privacy-relevant -

@@ -342,7 +342,7 @@ def parse_skeleton(req):
 
 WALLET_NAME_RE = r"[A-Za-z0-9][A-Za-z0-9 _\-]{0,39}"   # filename-safe, no traversal
 
-def import_skeleton(name, xpub, fp):
+def _wallet_path_for(name):
     name = str(name or "").strip()
     if not re.fullmatch(WALLET_NAME_RE, name):
         raise ValueError("wallet name: letters, digits, space, - _ (max 40)")
@@ -350,6 +350,40 @@ def import_skeleton(name, xpub, fp):
     os.makedirs(wdir, exist_ok=True)
     path = os.path.join(wdir, name + ".json")
     if os.path.exists(path): raise ValueError(f"wallet '{name}' already exists")
+    return name, path
+
+def _write_wallet(path, obj):
+    with open(path, "w", encoding="utf-8") as f:   # write WITHOUT a BOM
+        json.dump(obj, f, indent=2)
+
+def is_full_wallet_file(obj):
+    # a ⇓-exported (or Wasabi-written) wallet file, as opposed to a bare
+    # ColdCard/SeedSigner skeleton - skeletons have none of these
+    return isinstance(obj, dict) and (
+        "HdPubKeys" in obj or "BlockchainState" in obj or bool(obj.get("EncryptedSecret")))
+
+def restore_wallet_file(name, obj):
+    # verbatim restore of a full wallet file: keys (encrypted), labels and anonymity
+    # metadata all preserved. Only two mutations allowed: string heights -> ints
+    # (defensive for exports from the broken-era importer; 2.8's decoder wants
+    # numbers) and a network sanity check.
+    if not obj.get("ExtPubKey"):
+        raise ValueError("wallet file has no ExtPubKey - not a Wasabi wallet file")
+    network = read_wasabi_config().get("Network", "Main")
+    bs = obj.get("BlockchainState")
+    if isinstance(bs, dict):
+        wn = bs.get("Network")
+        if wn and str(wn) != str(network):
+            raise ValueError(f"wallet file is for network '{wn}' but the daemon runs '{network}'")
+        for k in ("Height", "BirthHeight"):
+            v = bs.get(k)
+            if isinstance(v, str) and v.isdigit(): bs[k] = int(v)
+    name, path = _wallet_path_for(name)
+    _write_wallet(path, obj)
+    return name
+
+def import_skeleton(name, xpub, fp):
+    name, path = _wallet_path_for(name)
     network = read_wasabi_config().get("Network", "Main")
     testnet = str(network).lower() != "main"
     # matches 2.8.0's KeyManager JSON decoder EXACTLY (Decode.Object in KeyManager.cs):
@@ -371,8 +405,7 @@ def import_skeleton(name, xpub, fp):
         "ExcludedCoinsFromCoinJoin": [],
         "HdPubKeys": [],
     }
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(wallet, f, indent=2)
+    _write_wallet(path, wallet)
     return name
 
 def detect_bitcoind():
@@ -488,6 +521,16 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 ln = int(self.headers.get("Content-Length") or 0)
                 req = json.loads(self.rfile.read(min(ln, 1_000_000)).decode() or "{}")
+                sk = req.get("skeleton")
+                if isinstance(sk, str) and sk.strip():
+                    try: sk = json.loads(sk)
+                    except ValueError: sk = None
+                if is_full_wallet_file(sk):
+                    # ⇓ backup fed back in: RESTORE verbatim (keys/labels/anonscores
+                    # intact) instead of stripping it to a watch-only skeleton
+                    name = restore_wallet_file(req.get("name"), sk)
+                    return self._send(200, {"ok": True, "name": name, "restored": True,
+                                            "watchOnly": not sk.get("EncryptedSecret")})
                 xpub, fp = parse_skeleton(req)
                 name = import_skeleton(req.get("name"), xpub, fp)
                 return self._send(200, {"ok": True, "name": name})

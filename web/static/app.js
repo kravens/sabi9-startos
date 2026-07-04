@@ -301,42 +301,53 @@ function showAddWallet() {
       <span class="tag">generate →</span></div>
     <div class="wrow action" id="wpRecover"><span class="dot">⟳</span> Recover from backup
       <span class="tag">12–24 words →</span></div>
-    <div class="wrow action" id="wpImport"><span class="dot">◇</span> Import hardware wallet
-      <span class="tag">ColdCard · SeedSigner · watch-only →</span></div>`);
+    <div class="wrow action" id="wpImport"><span class="dot">◇</span> Import / restore wallet file
+      <span class="tag">ColdCard · SeedSigner · ⇓ backup →</span></div>`);
   $("wpCreate").onclick = showCreateWallet;
   $("wpRecover").onclick = showRecoverWallet;
   $("wpImport").onclick = showImportWallet;
 }
 
-// import a ColdCard / SeedSigner skeleton -> watch-only wallet (fully offline pairing)
+// import a ColdCard / SeedSigner skeleton (-> watch-only) or RESTORE a ⇓ wallet-file
+// backup verbatim (keys, labels, anonymity metadata intact)
 function showImportWallet() {
   openDialog(`
-    <h2><span class="back" id="iwBack">←</span> Import hardware wallet</h2>
-    <p class="setp">Pairs a cold wallet <b>without it ever touching a computer network</b>:
-      on a ColdCard run <i>Advanced → Export Wallet → Wasabi Wallet</i> and bring the file
-      here by SD card - or paste the JSON / the account <b>xpub/zpub</b> shown by a
-      SeedSigner. The result is a <b>watch-only</b> wallet: it sees balances and makes
-      receive addresses, but this server can never spend from it.</p>
+    <h2><span class="back" id="iwBack">←</span> Import / restore wallet</h2>
+    <p class="setp">Two things fit here: a <b>hardware-wallet skeleton</b> (ColdCard
+      <i>Advanced → Export Wallet → Wasabi Wallet</i> by SD card, or a SeedSigner's
+      <b>xpub/zpub</b>) which becomes a watch-only wallet - or a <b>⇓ wallet-file
+      backup</b> made with the download button, which is restored exactly as it was:
+      keys, labels and anonymity scores included.</p>
     <div class="frow"><label>WALLET NAME</label>
       <input id="iwName" placeholder="e.g. ColdCard" spellcheck="false"></div>
-    <div id="iwDrop">⇩ drop the skeleton file here — or click to choose
+    <div id="iwDrop">⇩ drop the skeleton / backup file here — or click to choose
       <input type="file" id="iwFile" accept=".json,application/json,text/plain" hidden></div>
-    <div class="frow"><label>… OR PASTE - SKELETON JSON, OR A BARE XPUB / ZPUB</label>
+    <div class="frow"><label>… OR PASTE - SKELETON JSON, ⇓ BACKUP JSON, OR A BARE XPUB / ZPUB</label>
       <textarea id="iwText" rows="4" spellcheck="false"
         placeholder='{"MasterFingerprint": "0F056943", "ExtPubKey": "xpub6..."}  ·  or  ·  zpub6r...'></textarea></div>
-    <div class="frow"><label>MASTER FINGERPRINT (8 hex chars - auto-filled from the file)</label>
+    <div class="frow"><label id="iwFpLbl">MASTER FINGERPRINT (8 hex chars - auto-filled from the file)</label>
       <input id="iwFp" placeholder="0f056943" spellcheck="false" style="max-width:200px"></div>
+    <div id="iwHint"></div>
     <div class="drow"><button class="abtn" id="iwCancel">Cancel</button>
       <button class="abtn primary" id="iwGo">Import →</button></div>`);
   $("iwBack").onclick = showAddWallet;
   $("iwCancel").onclick = () => closeDialog();
 
-  const ingest = (text) => {
+  const ingest = (text, filename) => {
     $("iwText").value = text.trim();
+    if (filename && !$("iwName").value)
+      $("iwName").value = String(filename).replace(/\.json$/i, "");
     try {                                   // best-effort prefill; server re-validates
       const j = JSON.parse(text);
+      const full = j && (("HdPubKeys" in j) || ("BlockchainState" in j) || j.EncryptedSecret);
+      if (full) {
+        $("iwHint").innerHTML = `<div class="wchip good"><span class="wi">✓</span>
+          <span>Full wallet file detected - it will be <b>restored verbatim</b>
+          (no fingerprint needed).</span></div>`;
+        $("iwFpLbl").textContent = "MASTER FINGERPRINT - not needed for a full wallet file";
+      }
       const fp = j.MasterFingerprint || j.xfp || "";
-      if (fp) $("iwFp").value = String(fp).toLowerCase();
+      if (fp && typeof fp === "string") $("iwFp").value = fp.toLowerCase();
       if (!$("iwName").value && j.ColdCardFirmwareVersion) $("iwName").value = "ColdCard";
     } catch (e) {}
   };
@@ -344,14 +355,14 @@ function showImportWallet() {
   drop.onclick = () => $("iwFile").click();
   $("iwFile").onchange = () => {
     const f = $("iwFile").files[0];
-    if (f) f.text().then(ingest);
+    if (f) f.text().then((t) => ingest(t, f.name));
   };
   drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
   drop.ondragleave = () => drop.classList.remove("over");
   drop.ondrop = (e) => {
     e.preventDefault(); drop.classList.remove("over");
     const f = e.dataTransfer.files && e.dataTransfer.files[0];
-    if (f) f.text().then(ingest);
+    if (f) f.text().then((t) => ingest(t, f.name));
   };
 
   $("iwGo").onclick = async () => {
@@ -363,11 +374,15 @@ function showImportWallet() {
       const r = await api("/import-skeleton", {
         name, skeleton: $("iwText").value, masterFingerprint: $("iwFp").value.trim(),
       });
+      const doneMsg = r.restored
+        ? (r.watchOnly ? `◇ '${r.name}' restored ✓ - watch-only, labels intact`
+                       : `'${r.name}' restored ✓ - keys, labels and history metadata intact`)
+        : `◇ '${r.name}' imported - watch-only, syncing …`;
       // the daemon only scans Wallets/ at startup - probe before activating
       try {
         await rpc("loadwallet", [r.name]);
-        await activateWallet(r.name, "");   // watch-only: empty password
-        toast(`◇ '${r.name}' imported - watch-only, syncing …`);
+        await activateWallet(r.name, "");   // password re-asked per action as usual
+        toast(doneMsg);
       } catch (e) {
         if (/not found/i.test(String(e.message || e))) showImportRestart(r.name);
         else throw e;
@@ -1070,7 +1085,15 @@ function demoApi(path, body) {
   if (path === "/restart-daemon") return Promise.resolve({ ok: true });
   if (path === "/import-skeleton") {
     if (!/xpub|zpub|ExtPubKey/.test(String(body.skeleton))) return Promise.reject(new Error("demo: no key found"));
-    DEMO_WALLETS.push(body.name); DEMO_WATCHONLY.add(body.name);
+    let full = null;
+    try { full = JSON.parse(body.skeleton); } catch (e) {}
+    DEMO_WALLETS.push(body.name);
+    if (full && (("HdPubKeys" in full) || ("BlockchainState" in full) || full.EncryptedSecret)) {
+      const watchOnly = !full.EncryptedSecret;
+      if (watchOnly) DEMO_WATCHONLY.add(body.name);
+      return Promise.resolve({ ok: true, name: body.name, restored: true, watchOnly });
+    }
+    DEMO_WATCHONLY.add(body.name);
     return Promise.resolve({ ok: true, name: body.name });
   }
   return Promise.reject(new Error("demo api: " + path));
