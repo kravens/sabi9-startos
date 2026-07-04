@@ -55,6 +55,13 @@ CI). The Docker image downloads the official self-contained Wasabi release
 (`Wasabi-2.8.0-linux-{x64,arm64}.tar.gz`) at build time — see `UPDATING.md`
 for bumping the version.
 
+CI is active but needs repo config to go green: secret `DEV_KEY` (the
+`start-cli` developer signing key) for builds, and — for the publish job —
+variables `REFERENCE_REGISTRY` / `RELEASE_REGISTRY` / `S3_S9PKS_BASE_URL`
+plus secrets `S3_ACCESS_KEY` / `S3_SECRET_KEY`. Without these, `Build` (on
+PRs) and `Tag and Release` (on push to `master`) fail at the signing /
+registry step — expected until a registry is wired up.
+
 > This repo was authored by hand against the
 > [Project Structure](https://docs.start9.com/packaging/0.4.0.x/project-structure.html)
 > reference (the scaffolder `start-cli s9pk init-package` is Linux/macOS-only).
