@@ -48,6 +48,21 @@ const fmtUsd = (sats) => {
   const xr = S.status && S.status.exchangeRate;
   return xr ? `≈ ${Math.round((sats / 1e8) * xr).toLocaleString()} USD` : "";
 };
+// gethistory.datetime is a Unix epoch (integer) on the real 2.8.0 daemon, but an
+// ISO string in demo/older shapes - handle both -> YYYY-MM-DD.
+const fmtDate = (dt) => {
+  const s = String(dt ?? "").trim();
+  if (!s) return "";
+  if (/^\d+$/.test(s)) {                         // unix seconds
+    const d = new Date(Number(s) * 1000);
+    return isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
+  }
+  return s.slice(0, 10);                          // ISO date string
+};
+const shortId = (s, n = 8) => {
+  s = String(s || "");
+  return s.length > n + 5 ? `${s.slice(0, n)}…${s.slice(-4)}` : s;
+};
 const anonOf = (c) => c.anonymityScore || c.anonymitySet || 1;
 const target = () => (S.info && S.info.anonScoreTarget) || 5;
 const isCj = (h) => !!(h.islikelycoinjoin || h.isLikelyCoinJoin ||
@@ -214,12 +229,13 @@ function render() {
       : "";
     tr.innerHTML =
       `<td class="ic">${pending ? "⌛" : "✓"} ${cj ? '<span class="cj">◆</span>' : "⇄"}</td>` +
-      `<td class="date">${String(h.datetime || "").slice(0, 10)}</td>` +
+      `<td class="date">${fmtDate(h.datetime)}</td>` +
+      `<td class="txid" title="${esc(h.tx || "")}">${h.tx ? esc(shortId(h.tx)) : ""}</td>` +
       `<td class="amt ${amt > 0 ? "pos" : ""}">${amt > 0 ? "+" : ""}${fmtBtc(amt)} BTC</td>` +
       `<td class="lbl">${cj ? '<span class="chip">coinjoin</span>'
         : (h.label ? `<span class="chip">${esc(String(h.label))}</span>` : "")}</td>` +
       `<td class="conf ${pending ? "unconf" : ""}">${conf}${acts}</td>`;
-    tr.title = h.tx || "";
+    tr.title = h.tx ? "click to copy txid: " + h.tx : "";
     tr.onclick = () => { navigator.clipboard && navigator.clipboard.writeText(h.tx || "");
                          toast("txid copied"); };
     tr.querySelectorAll(".txa").forEach((b) => b.onclick = (ev) => {

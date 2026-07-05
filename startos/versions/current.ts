@@ -1,7 +1,7 @@
 import { VersionInfo, IMPOSSIBLE } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2.8.0:2',
+  version: '2.8.0:3',
   releaseNotes: {
     en_US:
       'Wallet lifecycle (create / recover / import + restore of ColdCard & SeedSigner and ⇓ ' +

@@ -125,7 +125,9 @@ table#txs { width: 100%; border-collapse: collapse; }
 #txs td { padding: 0 10px; font-size: 13.5px; white-space: nowrap; }
 #txs .ic { width: 54px; color: var(--dim); letter-spacing: 2px; }
 #txs .ic .cj { color: var(--green); }
-#txs .date { width: 120px; color: var(--dim); }
+#txs .date { width: 108px; color: var(--dim); }
+#txs .txid { width: 128px; font-family: var(--mono); color: var(--faint); font-size: 12px; }
+#txs tr:hover .txid { color: var(--green-dim); }
 #txs .amt { font-family: var(--mono); font-weight: 600; width: 190px; }
 #txs .amt.pos { color: var(--green); }
 #txs .lbl .chip {
