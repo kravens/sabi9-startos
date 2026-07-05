@@ -28,6 +28,19 @@ sibling of [`sabi.py`](https://github.com/kravens/coinjoin.nl/blob/main/scripts/
 - RPC proxy whitelists wallet methods; nothing that could exfiltrate keys.
 - Both daemons supervised by StartOS with health checks (RPC port, UI port).
 
+## Which build do I download?
+
+Releases ship two `.s9pk` files — pick the one for your server's processor:
+
+| File | Processor | Hardware |
+| --- | --- | --- |
+| `sabi9_x86_64.s9pk` | Intel / AMD | Start9 **Server Pure / Server Pro**, x86 mini-PCs, x86 VMs |
+| `sabi9_aarch64.s9pk` | ARM64 | **Raspberry Pi 4/5**, **Embassy One**, other ARM64 boards |
+
+Not sure which you have? **StartOS → System → About**, or run `uname -m` over SSH
+(`x86_64` or `aarch64`). Installing from a marketplace/registry picks the arch
+automatically; the choice only matters when downloading a `.s9pk` by hand.
+
 ## Building a community package (.s9pk)
 
 Requires a Linux/macOS box with the Start9 toolchain (Docker, make, Node 22,
