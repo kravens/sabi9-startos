@@ -37,6 +37,11 @@ Releases ship two `.s9pk` files — pick the one for your server's processor:
 | `sabi9_x86_64.s9pk` | Intel / AMD | Start9 **Server Pure / Server Pro**, x86 mini-PCs, x86 VMs |
 | `sabi9_aarch64.s9pk` | ARM64 | **Raspberry Pi 4/5**, **Embassy One**, other ARM64 boards |
 
+Most Start9 hardware — **Server Pure** and **Server Pro** — is **x86_64**, so
+that is the file most people want. The **aarch64** build is mainly for
+**Raspberry Pi** self-installs (and other ARM64 boards / Embassy One); note that
+aarch64 is *any* ARM64 device, not only a Pi.
+
 Not sure which you have? **StartOS → System → About**, or run `uname -m` over SSH
 (`x86_64` or `aarch64`). Installing from a marketplace/registry picks the arch
 automatically; the choice only matters when downloading a `.s9pk` by hand.
