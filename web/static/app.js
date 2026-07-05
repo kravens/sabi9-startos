@@ -265,22 +265,19 @@ function render() {
     tb.appendChild(tr);
   }
 
-  // music box: green pulse while in a round, amber pulse while signing/broadcasting
+  // music box = the coinjoin control. Watch-only wallets can't coinjoin (no keys,
+  // and starting one would crash the daemon), so they get NO music box at all -
+  // same as Wasabi Desktop. (wo declared above for the walletTitle badge.)
   const mb = $("musicbox");
+  if (wo) { mb.classList.add("hidden"); return; }
   mb.classList.remove("hidden");
-  // watch-only wallets have no key chain: startcoinjoin throws an UNHANDLED
-  // exception that crashes the whole daemon (SIGABRT). Never let it fire.
-  // (wo declared above for the walletTitle badge)
   const cjs2 = String((S.info && S.info.coinjoinStatus) || "");
   const critical = S.cjOn && /critical/i.test(cjs2);
-  mb.classList.toggle("mixing", S.cjOn && !critical && !wo);
+  mb.classList.toggle("mixing", S.cjOn && !critical);
   mb.classList.toggle("critical", critical);
   const np = S.coins.filter((c) => anonOf(c) < target())
                     .reduce((a, c) => a + (c.amount || 0), 0);
-  if (wo) {
-    $("mbStatus").textContent = "Watch-only — can't coinjoin";
-    $("mbSub").textContent = "coinjoin from the hot wallet that holds the keys";
-  } else if (critical) {
+  if (critical) {
     $("mbStatus").textContent = "Signing — keep the service running";
     $("mbSub").textContent = "the round is almost done";
   } else if (S.cjOn) {
@@ -291,8 +288,6 @@ function render() {
     $("mbSub").textContent = np ? `${fmtBtc(np)} BTC to make private — press ▶` : "everything is private ◆";
   }
   $("mbToggle").textContent = S.cjOn ? "⏸" : "▶";
-  $("mbToggle").disabled = wo;   // (loading/missing already returned early above)
-  $("mbStop").disabled = wo;
 }
 
 const esc = (s) => s.replace(/[&<>"']/g, (m) =>
