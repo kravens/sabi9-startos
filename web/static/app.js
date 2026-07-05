@@ -8,11 +8,9 @@ const DEMO = new URLSearchParams(location.search).has("demo");
 const S = {
   wallets: [], wallet: localStorage.getItem("sabi9.wallet") || null,
   walletsKnown: false,      // true once the daemon answered listwallets (drives welcome)
-  unlocked: {},             // wallet -> password, session-only, NEVER persisted
-  info: null, coins: [], history: [], fees: null, status: null,
+  info: null, coins: [], history: [], fees: null, status: null, balances: {},
   loading: false, cjOn: false, discreet: localStorage.getItem("sabi9.discreet") === "1",
 };
-const pwOf = () => S.unlocked[S.wallet] || "";
 
 // ---------- rpc ---------------------------------------------------------------------
 async function rpc(method, params = [], wallet = undefined) {
@@ -355,11 +353,10 @@ function selectWallet(name) {
   poll();
 }
 
-// create/recover/import land here with the password they just set, so the first
-// spend/coinjoin pre-fills. Session-only, never persisted.
-async function activateWallet(name, pw) {
+// create/recover/import land here after making the wallet. The password is NOT
+// kept - every spend/coinjoin re-asks for it (the daemon verifies it each time).
+async function activateWallet(name) {
   try { await rpc("loadwallet", [name]); } catch (e) {}
-  if (pw) S.unlocked[name] = pw;
   S.wallet = name; localStorage.setItem("sabi9.wallet", name);
   S.info = null; S.coins = []; S.history = []; S.loading = true;
   closeDialog(); toast(`opening ${name} ...`); poll();
@@ -696,7 +693,7 @@ function showPreview(p) {
           <div class="fact"><span class="fi">▤</span><span class="fk">Fee${chosen ? "" : " (estimate)"}</span>
             <span class="fv">${fmtBtc(fee)} BTC (${fmtUsd(fee)}) · ${useCoins.length} coins in</span></div>
           <div class="frow" style="margin-top:16px"><label>WALLET PASSWORD</label>
-            <input id="pvPw" type="password" value="${esc(pwOf())}"></div>
+            <input id="pvPw" type="password"></div>
           <div class="drow"><button class="abtn" onclick="closeDialog()">Cancel</button>
             <button class="abtn primary" id="pvConfirm">Confirm</button></div>
         </div>
@@ -707,7 +704,6 @@ function showPreview(p) {
     if ($("sugDn")) $("sugDn").onclick = () => { chosen = sug.dn; draw(); };
     $("pvConfirm").onclick = async () => {
       const pw = $("pvPw").value;
-      if (pw) S.unlocked[S.wallet] = pw;             // remember for the session
       const pays = [{ sendto: p.addr, amount: chosen ? chosen.sum : p.amt, label: p.lbl }];
       if (chosen) pays[0].subtractFee = true;        // consume the subset to zero: no change
       const coins = (chosen ? chosen.coins : picked)
@@ -789,7 +785,7 @@ async function showCoinjoin() {
     <div class="fact"><span class="fi">₿</span><span class="fk">Left to make private</span>
       <span class="fv">${fmtBtc(np)} BTC</span></div>
     <div class="frow" style="margin-top:16px"><label>WALLET PASSWORD</label>
-      <input id="cjPw" type="password" value="${esc(pwOf())}"></div>
+      <input id="cjPw" type="password"></div>
     <div class="radio">
       <label><input type="radio" name="cjMode" value="auto" checked>
         mix until everything reaches target ${target()}, then stop</label>
@@ -820,7 +816,6 @@ async function showCoinjoin() {
   if ($("cjFix")) $("cjFix").onclick = showSettings;
   $("cjStart").onclick = async () => {
     const auto = document.querySelector('input[name="cjMode"]:checked').value === "auto";
-    if ($("cjPw").value) S.unlocked[S.wallet] = $("cjPw").value;
     try { await rpc("startcoinjoin", [$("cjPw").value, auto, true], S.wallet);
           closeDialog(); toast("coinjoin started ◆"); poll(); }
     catch (e) { toast("✗ " + friendly(e), true, 6000); }
@@ -861,7 +856,7 @@ function showTxFix(kind, tid) {
     <div class="fact"><span class="fi">⇄</span><span class="fk">Transaction</span>
       <span class="fv">${esc(String(tid))}</span></div>
     <div class="frow" style="margin-top:14px"><label>WALLET PASSWORD</label>
-      <input id="tfPw" type="password" value="${esc(pwOf())}"></div>
+      <input id="tfPw" type="password"></div>
     <p class="setp">${speed ? "builds + broadcasts a higher-fee replacement (RBF, or CPFP for incoming)"
                             : "spends the funds back to yourself with a higher fee before it confirms"}</p>
     <div class="drow"><button class="abtn" onclick="closeDialog()">Close</button>
@@ -869,7 +864,6 @@ function showTxFix(kind, tid) {
   $("tfGo").onclick = async () => {
     try {
       $("tfGo").disabled = true;
-      if ($("tfPw").value) S.unlocked[S.wallet] = $("tfPw").value;
       const hx = await rpc(speed ? "speeduptransaction" : "canceltransaction",
                            [tid, $("tfPw").value], S.wallet);
       const r = await rpc("broadcast", [typeof hx === "string" ? hx : String(hx)]);
@@ -1102,20 +1096,16 @@ $("navDiscreet").onclick = () => {
   toast(S.discreet ? "discreet mode on" : "discreet mode off");
   render();
 };
-// music box = the coinjoin control: ▶ starts auto-coinjoin with the session password,
-// falls back to the full dialog when the daemon rejects it (wrong/missing password)
+// music box: ▶ opens the coinjoin dialog to enter the password (starting a
+// coinjoin spends/signs, so it always asks - the password is never cached);
+// ⏸ just stops, which needs no password.
 $("mbToggle").onclick = async () => {
-  // never start coinjoin on a watch-only wallet - it crashes the daemon
-  if (S.info && S.info.isWatchOnly && !S.cjOn) return showCoinjoin();
   if (S.cjOn) {
     try { await rpc("stopcoinjoin", [], S.wallet); toast("coinjoin paused"); poll(); }
     catch (e) { toast("✗ " + friendly(e), true); }
     return;
   }
-  try {
-    await rpc("startcoinjoin", [pwOf(), true, true], S.wallet);
-    toast("coinjoin started ◆  mixing until everything is private"); poll();
-  } catch (e) { showCoinjoin(); toast("✗ " + friendly(e), true, 5000); }
+  showCoinjoin();
 };
 $("mbStop").onclick = () => rpc("stopcoinjoin", [], S.wallet).then(() => { toast("coinjoin stopped"); poll(); });
 $("mbMore").onclick = () => showCoinjoin();
