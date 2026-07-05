@@ -910,6 +910,16 @@ async function showSettings(tab = "coordinator") {
         <div class="frow"><label>MAX DAYS IN MEMPOOL - rebroadcast/forget after</label>
           <input id="stMemDays" value="${esc(String(s.maxDaysInMempool))}" spellcheck="false"></div>
       </div>
+      <div class="improve">WALLET${ws ? ` '${esc(S.wallet)}'` : ""}</div>
+      ${ws ? `
+      <div class="frow"><label>GAP LIMIT - how many unused addresses ahead the wallet derives
+        and scans (default 21)</label>
+        <input id="stGap" value="${esc(String(ws.minGapLimit))}" spellcheck="false"
+               style="max-width:160px"></div>
+      <p class="setp"><b>Raising it re-scans from the wallet's birth</b> - use if a large or
+        hardware wallet shows a wrong balance because activity sits beyond 21 unused
+        addresses. Lives in the wallet file; applies on the next restart.</p>`
+      : `<p class="setp">Open a wallet to set its gap limit.</p>`}
     </div>
 
     <div id="st-coordinator" class="stsec hidden">
@@ -942,21 +952,15 @@ async function showSettings(tab = "coordinator") {
         <div class="frow"><label>TX BROADCAST FALLBACK</label>
           ${sel("stBc", s.externalTransactionBroadcaster, ["MempoolSpace", "BlockstreamInfo"])}</div>
       </div>
-      <div class="improve">WALLET${ws ? ` '${esc(S.wallet)}'` : ""}</div>
+      <div class="improve">COINJOIN${ws ? ` - WALLET '${esc(S.wallet)}'` : ""}</div>
       ${ws ? `
-      <div class="inline2">
-        <div class="frow"><label>ANONYMITY SCORE TARGET - coinjoin until every coin reaches this
-          (default 10 · higher = more mixing/fees/privacy)</label>
-          <input id="stAnon" value="${esc(String(ws.anonScoreTarget))}" spellcheck="false"></div>
-        <div class="frow"><label>GAP LIMIT - how many unused addresses ahead the wallet scans
-          (default 21)</label>
-          <input id="stGap" value="${esc(String(ws.minGapLimit))}" spellcheck="false"></div>
-      </div>
-      <p class="setp">Both live in the wallet file; changes apply after a restart (Save offers
-        one). <b>Raising the gap limit re-scans from the wallet's birth</b> - use it if a large
-        or hardware wallet shows a wrong balance because activity sits beyond 21 unused
-        addresses.${ws.redCoinIsolation ? " Red coin isolation: on." : ""}</p>`
-      : `<p class="setp">Open a wallet to set its anonymity target and gap limit.</p>`}
+      <div class="frow"><label>ANONYMITY SCORE TARGET - coinjoin until every coin reaches this
+        (default 10 · higher = more mixing, more fees, more privacy)</label>
+        <input id="stAnon" value="${esc(String(ws.anonScoreTarget))}" spellcheck="false"
+               style="max-width:160px"></div>
+      <p class="setp">Lives in the wallet file; applies after the daemon restarts (Save offers
+        a restart button).${ws.redCoinIsolation ? " Red coin isolation: on." : ""}</p>`
+      : `<p class="setp">Open a wallet to set its anonymity score target.</p>`}
     </div>
 
     <div id="stSaved"></div>
