@@ -229,7 +229,7 @@ function render() {
   }
 
   const note = $("syncNote");
-  const fleft = Number(st.filtersLeft || 0);
+  const fleft = Number((S.status || {}).filtersLeft || 0);
   if (S.noCoord) {
     note.classList.remove("hidden");
     note.innerHTML = "⚠ No coinjoin coordinator configured - coinjoin is disabled. " +
