@@ -72,12 +72,28 @@ body {
 
 /* ---- shell ------------------------------------------------------------------- */
 #shell { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-#topbar { display: flex; justify-content: center; padding: 12px 0 4px; position: relative; }
-#statusline {
-  position: absolute; right: 22px; top: 50%; transform: translateY(-50%);
-  color: var(--dim); font-family: var(--mono); font-size: 12px; white-space: nowrap;
+#topbar { display: flex; justify-content: center; padding: 12px 0 4px; }
+
+/* network indicator (bottom-right, Wasabi-Desktop style) */
+#netIndicator {
+  position: fixed; right: 16px; bottom: 16px; z-index: 35; cursor: default;
+  display: flex; align-items: center; gap: 7px; backdrop-filter: blur(4px);
+  background: #101010f2; border: 1px solid #2c2c2c; border-radius: 20px;
+  padding: 5px 12px 5px 10px; font-family: var(--mono); font-size: 12px; color: var(--dim);
 }
-#statusline .dot.on { color: var(--green); } #statusline .dot.off { color: var(--red); }
+#netIndicator .netdot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: 0 0 auto; }
+#netIndicator.ok   .netdot { background: var(--green); box-shadow: 0 0 6px var(--green-dim); }
+#netIndicator.sync .netdot { background: var(--amber); animation: breathe 1.6s ease-in-out infinite; }
+#netIndicator.bad  .netdot { background: var(--red); }
+#netPop {
+  position: absolute; right: 0; bottom: calc(100% + 8px); display: none;
+  background: #161616; border: 1px solid #333; border-radius: 10px; padding: 10px 13px;
+  min-width: 210px; box-shadow: 0 10px 34px #000b;
+}
+#netIndicator:hover #netPop { display: block; }
+#netPop .nphead { font-size: 10px; letter-spacing: 1.4px; color: var(--faint); margin-bottom: 7px; }
+#netPop .nprow { display: flex; justify-content: space-between; gap: 20px; padding: 3px 0; }
+#netPop .nprow span { color: var(--dim); } #netPop .nprow b { color: var(--text); font-weight: 600; }
 #search {
   width: 420px; max-width: 60vw; background: var(--panel); color: var(--dim);
   border: 1px solid #2a2a2a; border-radius: 8px; padding: 7px 14px; font-size: 13px;

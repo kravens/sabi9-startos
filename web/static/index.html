@@ -28,8 +28,7 @@
 </nav>
 
 <div id="shell">
-  <div id="topbar"><input id="search" placeholder="Search settings / advanced features">
-    <div id="statusline"></div></div>
+  <div id="topbar"><input id="search" placeholder="Search settings / advanced features"></div>
 
   <main id="main">
     <div id="syncNote" class="hidden"></div>
@@ -125,6 +124,18 @@
   <button class="mbtn play" id="mbToggle" title="Start / pause auto-coinjoin">▶</button>
   <button class="mbtn" id="mbStop" title="Stop coinjoin">■</button>
   <button class="mbtn" id="mbMore" title="Coinjoin options: sweep, payments, modes">⋯</button>
+</div>
+
+<div id="netIndicator" class="hidden" title="Network status">
+  <span class="netdot"></span><span id="netPeers"></span>
+  <div id="netPop">
+    <div class="nphead">NETWORK</div>
+    <div class="nprow"><span>Tor</span><b id="npTor">—</b></div>
+    <div class="nprow"><span>Peers</span><b id="npPeers">—</b></div>
+    <div class="nprow"><span>Block height</span><b id="npHeight">—</b></div>
+    <div class="nprow"><span>Block filters</span><b id="npFilters">—</b></div>
+    <div class="nprow"><span>Network</span><b id="npNet">—</b></div>
+  </div>
 </div>
 
 <div id="overlay" class="hidden"><div class="dialog" id="dialog"></div></div>

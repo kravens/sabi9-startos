@@ -153,18 +153,36 @@ async function poll() {
   }
 }
 
+// ---------- network indicator (Wasabi-Desktop-style, bottom-right) ------------------
+// getstatus gives torStatus, peers[] ({isConnected,...}), filtersLeft/Count,
+// bestBlockchainHeight, network. Compact dot + peer count; hover for the detail.
+function renderNetIndicator() {
+  const st = S.status || {};
+  const ind = $("netIndicator");
+  if (!st.torStatus && !st.bestBlockchainHeight) { ind.classList.add("hidden"); return; }
+  ind.classList.remove("hidden");
+  const tor = String(st.torStatus || "");
+  const torBad = tor.toLowerCase().startsWith("not");     // "Not running"
+  const peers = Array.isArray(st.peers)
+    ? st.peers.filter((p) => p && p.isConnected !== false).length : Number(st.peers) || 0;
+  const fleft = Number(st.filtersLeft || 0), synced = fleft === 0;
+  const state = (peers > 0 && synced && !torBad) ? "ok"
+    : (torBad || peers === 0) ? "bad" : "sync";
+  ind.classList.remove("ok", "sync", "bad"); ind.classList.add(state);
+  $("netPeers").textContent = `${peers} peer${peers === 1 ? "" : "s"}`;
+  $("npTor").textContent = tor || "—";
+  $("npPeers").textContent = String(peers);
+  $("npHeight").textContent = st.bestBlockchainHeight
+    ? "#" + Number(st.bestBlockchainHeight).toLocaleString() : "—";
+  $("npFilters").textContent = synced ? "synced" : `${fleft.toLocaleString()} to go`;
+  $("npNet").textContent = String(st.network || "—");
+}
+
 // ---------- render -------------------------------------------------------------------
 function render() {
   document.body.classList.toggle("discreet", S.discreet);
 
-  // status strip: tor / chain height / network (from getstatus)
-  const st = S.status || {};
-  const torOk = String(st.torStatus || "").toLowerCase().startsWith(("running"));
-  $("statusline").innerHTML = st.bestBlockchainHeight
-    ? `<span class="dot ${torOk ? "on" : "off"}">●</span> Tor · ` +
-      `#${Number(st.bestBlockchainHeight).toLocaleString()} · ${esc(String(st.network || ""))}`
-    : "";
-
+  renderNetIndicator();
   renderSidebar();
 
   // screen state: welcome (daemon answered, zero wallets) / pick-a-wallet / dashboard
@@ -1155,7 +1173,9 @@ function demoRpc(method, params, wallet) {
     return Promise.resolve(null);
   }
   const m = {
-    getstatus: { exchangeRate: 66186, torStatus: "Running", peers: [1, 2, 3],
+    getstatus: { exchangeRate: 66186, torStatus: "Running",
+                 peers: Array.from({ length: 8 }, (_, i) => ({ isConnected: true,
+                   endpoint: `10.0.0.${i}:8333`, lastSeen: "2026-07-05T09:00:00" })),
                  bestBlockchainHeight: "956652", filtersCount: 956652, filtersLeft: 0,
                  network: "Main" },
     listwallets: W.map((w) => ({ walletName: w })),
