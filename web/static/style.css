@@ -374,7 +374,7 @@ table#txs { width: 100%; border-collapse: collapse; }
 }
 body.discreet .amount, body.discreet .amt, body.discreet .sub,
 body.discreet #rvAddr, body.discreet .fv, body.discreet .badge b,
-body.discreet .swbal {
+body.discreet .swbal, body.discreet #mbSub {
   filter: blur(7px); user-select: none;
 }
 ::-webkit-scrollbar { width: 10px; }
