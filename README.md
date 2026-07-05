@@ -81,10 +81,13 @@ registry step — expected until a registry is wired up.
 ## ⚠ Uninstalling deletes your wallets
 
 StartOS removes a service's data volume on uninstall: every wallet file on the
-daemon goes with it. Updates and reinstalls over an existing install keep the
-data. Before uninstalling, make a **StartOS backup** (includes all wallets,
-labels and anonymity metadata) or use the UI's **⇓ wallet-file download**.
-Recovery words + password restore funds but not labels/privacy metadata.
+daemon goes with it. Updates and reinstalls over a *higher package revision*
+keep the data. Before uninstalling, make a **StartOS backup** — it snapshots
+the whole data dir (wallets, labels, anonymity metadata, **transaction store
+and filter index**) and restores **instantly, with no re-scan**. The UI's **⇓
+wallet-file download** backs up keys + labels only, so restoring it rebuilds
+history by re-scanning the chain. Recovery words + password restore funds but
+not labels/privacy metadata (also re-scans).
 
 ## Security model
 

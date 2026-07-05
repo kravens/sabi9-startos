@@ -111,16 +111,22 @@ keep P2P syncing.
 
 Three layers, strongest first:
 
-1. **StartOS backup** (System → Backups) - includes the full Wasabi data
-   directory: all wallet files, labels, anonymity metadata, configuration.
-   Reinstall + *Restore from backup* brings everything back exactly.
+1. **StartOS backup** (System → Backups) - the complete, instant one. It
+   snapshots the whole Wasabi data directory: all wallet files, labels,
+   anonymity metadata, **the transaction store and block-filter index**, and
+   configuration. Reinstall + *Restore from backup* brings everything back
+   **exactly and immediately - no re-scan**, because the transaction history is
+   part of the snapshot. Use this to move a node or recover after a wipe.
 2. **Wallet file download** - the **⇓ button** next to Send/Receive saves the
    open wallet's `.json` to your computer. It contains your address labels and
    anonymity scores plus the password-encrypted secret (hot wallets) or just
    the xpub (watch-only) - the same file Wasabi Desktop backs up. Store it
-   like cash. Restore it later via **＋ Add wallet → Import / restore wallet
-   file** - it comes back exactly as it was.
+   like cash. Restore it via **＋ Add wallet → Import / restore wallet file**.
+   The keys and labels come back exactly, but the wallet file does **not**
+   contain the transaction store, so the history is rebuilt by re-scanning the
+   chain (the loading screen shows the countdown). For instant history use a
+   StartOS backup instead.
 3. **Recovery words + password** - restore your *funds* anywhere, but **not**
    your labels or anonymity metadata: the restored wallet no longer knows
-   which coins were coinjoined or who knows which address. Privacy-relevant -
-   prefer 1 or 2.
+   which coins were coinjoined or who knows which address. History re-scans.
+   Privacy-relevant - prefer 1 or 2.
