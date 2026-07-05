@@ -194,6 +194,7 @@ def norm_coord_uri(s):                            # user text -> URI for Config.
 # value, so enum-ish fields only accept values we know 2.8 ships (or the current one).
 _PROVIDERS = {"MempoolSpace", "BlockstreamInfo"}
 _USETOR = {"Enabled", "Disabled"}
+_NETWORKS = {"Main", "TestNet", "RegTest"}     # Wasabi/NBitcoin network names
 
 def validate_settings(req, cfg):
     upd = {}
@@ -234,6 +235,11 @@ def validate_settings(req, cfg):
         v = str(req["useTor"] or "")
         if v not in keep_or(_USETOR, "UseTor"): raise ValueError("Tor: Enabled or Disabled")
         upd["UseTor"] = v
+    if "network" in req:
+        v = str(req["network"] or "")
+        if v not in keep_or(_NETWORKS, "Network"):
+            raise ValueError("network: Main, TestNet or RegTest")
+        upd["Network"] = v
     for jskey, ckey in (("exchangeRateProvider", "ExchangeRateProvider"),
                         ("feeRateEstimationProvider", "FeeRateEstimationProvider"),
                         ("externalTransactionBroadcaster", "ExternalTransactionBroadcaster")):
@@ -368,6 +374,7 @@ def read_wallet_settings(name):
     with open(_existing_wallet_path(name), encoding="utf-8-sig") as f:
         d = json.load(f)
     return {"anonScoreTarget": d.get("AnonScoreTarget", 10),
+            "minGapLimit": d.get("MinGapLimit", 21),
             "redCoinIsolation": bool(d.get("RedCoinIsolation", False)),
             "watchOnly": not d.get("EncryptedSecret")}
 
@@ -379,6 +386,27 @@ def set_wallet_anon_target(name, value):
     with open(p, encoding="utf-8-sig") as f:
         d = json.load(f)
     d["AnonScoreTarget"] = v
+    _write_wallet(p, d)
+    return v
+
+def set_wallet_gap_limit(name, value):
+    try: v = int(value)
+    except (TypeError, ValueError): raise ValueError("gap limit must be a whole number")
+    if not 21 <= v <= 100000: raise ValueError("gap limit: 21-100000 (Wasabi default 21)")
+    p = _existing_wallet_path(name)
+    with open(p, encoding="utf-8-sig") as f:
+        d = json.load(f)
+    d["MinGapLimit"] = v
+    # a bigger gap only helps if we RE-SCAN for the newly-derivable addresses, so
+    # reset the processed Height back to BirthHeight to force a full rescan on the
+    # next daemon start (this is the whole point of raising the gap on a wallet
+    # whose balance is wrong).
+    bs = d.get("BlockchainState")
+    if isinstance(bs, dict):
+        birth = bs.get("BirthHeight")
+        if not isinstance(birth, int) or birth <= 0:
+            birth = 481824 if str(bs.get("Network", "Main")).lower() == "main" else 0
+        bs["Height"] = birth
     _write_wallet(p, d)
     return v
 
@@ -558,8 +586,13 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 ln = int(self.headers.get("Content-Length") or 0)
                 req = json.loads(self.rfile.read(min(ln, 100_000)).decode() or "{}")
-                v = set_wallet_anon_target(req.get("name"), req.get("anonScoreTarget"))
-                return self._send(200, {"ok": True, "anonScoreTarget": v, "restartRequired": True})
+                name = req.get("name")
+                res = {"ok": True, "restartRequired": True}
+                if "anonScoreTarget" in req:
+                    res["anonScoreTarget"] = set_wallet_anon_target(name, req["anonScoreTarget"])
+                if "gapLimit" in req:
+                    res["gapLimit"] = set_wallet_gap_limit(name, req["gapLimit"])
+                return self._send(200, res)
             except ValueError as e:
                 return self._send(400, {"error": str(e)})
             except Exception as e:

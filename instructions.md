@@ -81,7 +81,14 @@ Signing stays on the hardware device.
 Importing or restoring a wallet file rebuilds its **transaction history by
 rescanning the chain** (the file holds keys and labels, not the transaction
 store), so balances and history appear only after the block-filter sync
-finishes - the loading screen shows the countdown.
+finishes - the loading screen shows the countdown. If a large or hardware
+wallet shows a **wrong balance** (activity spread beyond 21 unused addresses),
+raise its **gap limit** in **Settings → Privacy** - saving re-scans from the
+wallet's birth.
+
+Testers can switch the **Bitcoin network** (Main / TestNet / RegTest) in
+**Settings → Bitcoin**. Wallets are network-specific, so change it on a fresh
+setup - switching hides wallets from the other network until you switch back.
 
 ## Optional: Bitcoin Core backend
 

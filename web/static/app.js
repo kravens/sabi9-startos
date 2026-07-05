@@ -884,6 +884,12 @@ async function showSettings(tab = "coordinator") {
     </div>
 
     <div id="st-bitcoin" class="stsec hidden">
+      <div class="improve">NETWORK</div>
+      <div class="frow"><label>BITCOIN NETWORK - Main for real coins; TestNet / RegTest for testers</label>
+        ${sel("stNet", s.network, ["Main", "TestNet", "RegTest"])}</div>
+      <p class="setp">⚠ Changing the network makes wallets from the other network
+        <b>unusable until you switch back</b> (wallets and the chain are network-specific) and
+        starts a fresh sync. Best set once, before creating wallets.</p>
       <div class="improve">BITCOIN CORE RPC BACKEND · OPTIONAL</div>
       <p class="setp">If Bitcoin Core runs on this Start9 node, the daemon fetches blocks and
         filters from it instead of syncing from public P2P peers. Empty = keep P2P.</p>
@@ -936,15 +942,21 @@ async function showSettings(tab = "coordinator") {
         <div class="frow"><label>TX BROADCAST FALLBACK</label>
           ${sel("stBc", s.externalTransactionBroadcaster, ["MempoolSpace", "BlockstreamInfo"])}</div>
       </div>
-      <div class="improve">COINJOIN PRIVACY${ws ? ` - WALLET '${esc(S.wallet)}'` : ""}</div>
+      <div class="improve">WALLET${ws ? ` '${esc(S.wallet)}'` : ""}</div>
       ${ws ? `
-      <div class="frow"><label>ANONYMITY SCORE TARGET - coinjoin until every coin reaches this
-        (default 10 · higher = more mixing, more fees, more privacy)</label>
-        <input id="stAnon" value="${esc(String(ws.anonScoreTarget))}" spellcheck="false"
-               style="max-width:140px"></div>
-      <p class="setp">Lives in the wallet file - a change applies after the daemon restarts
-        (Save offers a restart button).${ws.redCoinIsolation ? " Red coin isolation: on." : ""}</p>`
-      : `<p class="setp">Open a wallet to set its anonymity score target.</p>`}
+      <div class="inline2">
+        <div class="frow"><label>ANONYMITY SCORE TARGET - coinjoin until every coin reaches this
+          (default 10 · higher = more mixing/fees/privacy)</label>
+          <input id="stAnon" value="${esc(String(ws.anonScoreTarget))}" spellcheck="false"></div>
+        <div class="frow"><label>GAP LIMIT - how many unused addresses ahead the wallet scans
+          (default 21)</label>
+          <input id="stGap" value="${esc(String(ws.minGapLimit))}" spellcheck="false"></div>
+      </div>
+      <p class="setp">Both live in the wallet file; changes apply after a restart (Save offers
+        one). <b>Raising the gap limit re-scans from the wallet's birth</b> - use it if a large
+        or hardware wallet shows a wrong balance because activity sits beyond 21 unused
+        addresses.${ws.redCoinIsolation ? " Red coin isolation: on." : ""}</p>`
+      : `<p class="setp">Open a wallet to set its anonymity target and gap limit.</p>`}
     </div>
 
     <div id="stSaved"></div>
@@ -994,6 +1006,7 @@ async function showSettings(tab = "coordinator") {
       dustThreshold: $("stDust").value.trim(),
       maxDaysInMempool: $("stMemDays").value.trim(),
       useTor: $("stTor").value,
+      network: $("stNet").value,
       exchangeRateProvider: $("stXr").value,
       feeRateEstimationProvider: $("stFr").value,
       externalTransactionBroadcaster: $("stBc").value,
@@ -1005,7 +1018,8 @@ async function showSettings(tab = "coordinator") {
       await api("/settings", body);
       if ($("stAnon"))
         await api("/wallet-settings", { name: S.wallet,
-                                        anonScoreTarget: $("stAnon").value.trim() });
+                                        anonScoreTarget: $("stAnon").value.trim(),
+                                        gapLimit: $("stGap").value.trim() });
       $("stSaved").innerHTML = `<div class="wchip good"><span class="wi">✓</span>
         <span>Saved - settings apply on the next service restart.</span>
         <button class="abtn" id="stRestart" style="margin-left:auto;flex:0 0 auto">⟳ Restart service</button></div>`;
@@ -1160,13 +1174,22 @@ function demoApi(path, body) {
   if (path === "/restart-daemon") return Promise.resolve({ ok: true });
   if (path.startsWith("/wallet-settings")) {
     if (body !== undefined) {
-      const v = parseInt(body.anonScoreTarget, 10);
-      if (!(v >= 2 && v <= 300)) return Promise.reject(new Error("anonymity target: 2-300"));
-      DEMO_WSET[body.name] = v;
-      return Promise.resolve({ ok: true, anonScoreTarget: v, restartRequired: true });
+      const res = { ok: true, restartRequired: true };
+      if ("anonScoreTarget" in body) {
+        const v = parseInt(body.anonScoreTarget, 10);
+        if (!(v >= 2 && v <= 300)) return Promise.reject(new Error("anonymity target: 2-300"));
+        (DEMO_WSET[body.name] = DEMO_WSET[body.name] || {}).anon = v; res.anonScoreTarget = v;
+      }
+      if ("gapLimit" in body) {
+        const g = parseInt(body.gapLimit, 10);
+        if (!(g >= 21 && g <= 100000)) return Promise.reject(new Error("gap limit: 21-100000"));
+        (DEMO_WSET[body.name] = DEMO_WSET[body.name] || {}).gap = g; res.gapLimit = g;
+      }
+      return Promise.resolve(res);
     }
     const name = decodeURIComponent(path.split("name=")[1] || "");
-    return Promise.resolve({ anonScoreTarget: DEMO_WSET[name] || 10,
+    const w = DEMO_WSET[name] || {};
+    return Promise.resolve({ anonScoreTarget: w.anon || 10, minGapLimit: w.gap || 21,
                              redCoinIsolation: false, watchOnly: DEMO_WATCHONLY.has(name) });
   }
   if (path === "/import-skeleton") {
