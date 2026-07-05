@@ -65,6 +65,12 @@ const shortId = (s, n = 8) => {
 };
 const anonOf = (c) => c.anonymityScore || c.anonymitySet || 1;
 const target = () => (S.info && S.info.anonScoreTarget) || 5;
+// short, plain coinjoin status - never surface Wasabi's verbose round text (it
+// talks about "participants" and confuses testers)
+const cjStatusShort = () => {
+  if (!S.cjOn) return "Idle";
+  return /critical/i.test(String((S.info && S.info.coinjoinStatus) || "")) ? "Signing" : "Coinjoining";
+};
 const isCj = (h) => !!(h.islikelycoinjoin || h.isLikelyCoinJoin ||
                        String(h.label || "").toLowerCase() === "coinjoin");
 
@@ -124,6 +130,23 @@ async function poll() {
         else if (m.includes("not found")) { S.walletMissing = true; S.loading = false; }
         else throw e;
       }
+    }
+    // per-wallet balances for the sidebar total (native getwalletinfo.balance -
+    // the daemon sums coins in C#; crash-safe, unlike the Scheme coin query).
+    // null = not known yet (loading) -> shown as "…".
+    S.balances = S.balances || {};
+    for (const w of S.wallets) {
+      if (w === S.wallet) {
+        S.balances[w] = S.loading ? null
+          : (S.info && typeof S.info.balance === "number" ? S.info.balance
+             : S.coins.reduce((a, c) => a + (c.amount || 0), 0));
+        continue;
+      }
+      try {
+        const wi = await rpc("getwalletinfo", [], w);
+        S.balances[w] = wi && wi.loaded === true && typeof wi.balance === "number"
+          ? wi.balance : null;
+      } catch (e) { S.balances[w] = null; }
     }
     render();
   } catch (e) {
@@ -257,15 +280,17 @@ function render() {
   const np = S.coins.filter((c) => anonOf(c) < target())
                     .reduce((a, c) => a + (c.amount || 0), 0);
   if (wo) {
-    $("mbStatus").textContent = "Watch-only wallet - coinjoin needs private keys";
-    $("mbSub").textContent = "sign and coinjoin from its hot counterpart";
+    $("mbStatus").textContent = "Watch-only — can't coinjoin";
+    $("mbSub").textContent = "coinjoin from the hot wallet that holds the keys";
+  } else if (critical) {
+    $("mbStatus").textContent = "Signing — keep the service running";
+    $("mbSub").textContent = "the round is almost done";
+  } else if (S.cjOn) {
+    $("mbStatus").textContent = "Coinjoining…";
+    $("mbSub").textContent = np ? `${fmtBtc(np)} BTC left to make private` : "finishing up";
   } else {
-    $("mbStatus").textContent = S.cjOn
-      ? (critical ? "Signing the coinjoin - do not stop the service"
-                  : "Awaiting other participants")
-      : "Coinjoin is idle";
-    $("mbSub").textContent = S.cjOn ? `mixing · ${fmtBtc(np)} BTC still non-private`
-      : (np ? `${fmtBtc(np)} BTC could be made private - press ▶` : "everything is private ◆");
+    $("mbStatus").textContent = "Coinjoin idle";
+    $("mbSub").textContent = np ? `${fmtBtc(np)} BTC to make private — press ▶` : "everything is private ◆";
   }
   $("mbToggle").textContent = S.cjOn ? "⏸" : "▶";
   $("mbToggle").disabled = wo;   // (loading/missing already returned early above)
@@ -291,52 +316,53 @@ const dialogOpen = () => !$("overlay").classList.contains("hidden");
 $("overlay").addEventListener("click", (e) => { if (e.target.id === "overlay") closeDialog(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDialog(); });
 
-// sidebar wallet list: every wallet on the daemon, locked until the user opens it
+// sidebar wallet list: every wallet on the daemon. Click to VIEW (no password -
+// loading a wallet is read-only; the daemon asks for the password only when you
+// spend or coinjoin). Shows each wallet's balance and, with 2+ open, a total.
 function renderSidebar() {
   const el = $("sbWallets");
-  el.innerHTML = S.wallets.map((w) => {
+  const bals = S.balances || {};
+  const known = S.wallets.filter((w) => typeof bals[w] === "number");
+  const bal = (w) => typeof bals[w] === "number"
+    ? `<span class="swbal">${fmtBtc(bals[w]).trim()}</span>`
+    : (w === S.wallet ? '<span class="swbal dim">…</span>' : "");
+  const totalRow = known.length > 1
+    ? `<div class="swtotal"><span class="swname">All wallets</span>
+         <span class="swbal">${fmtBtc(known.reduce((a, w) => a + bals[w], 0)).trim()} BTC</span></div>`
+    : "";
+  el.innerHTML = totalRow + S.wallets.map((w) => {
     const active = w === S.wallet;
-    const open = active || (w in S.unlocked);
-    return `<div class="swrow ${active ? "active" : ""}" data-w="${esc(w)}"
-      title="${open ? esc(w) : esc(w) + " · locked - click to open"}">
-      <span class="dot ${open ? "on" : ""}">●</span>
-      <span class="swname">${esc(w)}</span>${open ? "" : '<span class="swlock">locked</span>'}</div>`;
+    return `<div class="swrow ${active ? "active" : ""}" data-w="${esc(w)}" title="${esc(w)}">
+      <span class="dot ${active ? "on" : ""}">●</span>
+      <span class="swname">${esc(w)}</span>${bal(w)}</div>`;
   }).join("") + (S.walletsKnown
     ? `<div class="swrow add" id="sbAdd"><span class="dot">＋</span>
        <span class="swname">Add wallet</span></div>` : "");
   el.querySelectorAll(".swrow[data-w]").forEach((r) => {
-    r.onclick = () => {
-      const w = r.dataset.w;
-      if (w === S.wallet) return;
-      if (w in S.unlocked) activateWallet(w, S.unlocked[w]);
-      else showUnlock(w);
-    };
+    r.onclick = () => selectWallet(r.dataset.w);
   });
   if ($("sbAdd")) $("sbAdd").onclick = showAddWallet;
 }
 
+// view a wallet - NO password (loadwallet is read-only; the daemon verifies the
+// password only on spend/coinjoin). Switching between wallets never re-prompts.
+function selectWallet(name) {
+  if (name === S.wallet) return;
+  S.wallet = name; localStorage.setItem("sabi9.wallet", name);
+  S.info = null; S.coins = []; S.history = []; S.loading = true;
+  closeDialog();
+  rpc("loadwallet", [name]).catch(() => {});     // idempotent; daemon auto-loads too
+  poll();
+}
+
+// create/recover/import land here with the password they just set, so the first
+// spend/coinjoin pre-fills. Session-only, never persisted.
 async function activateWallet(name, pw) {
   try { await rpc("loadwallet", [name]); } catch (e) {}
-  S.unlocked[name] = pw || "";        // held in memory for this session only
+  if (pw) S.unlocked[name] = pw;
   S.wallet = name; localStorage.setItem("sabi9.wallet", name);
   S.info = null; S.coins = []; S.history = []; S.loading = true;
   closeDialog(); toast(`opening ${name} ...`); poll();
-}
-
-function showUnlock(name) {
-  openDialog(`
-    <h2><span class="back" onclick="closeDialog()">←</span> Open ${esc(name)}</h2>
-    <div class="frow"><label>WALLET PASSWORD</label>
-      <input id="ulPw" type="password" autofocus></div>
-    <p class="setp">The password stays on this device for the session and pre-fills
-      spend and coinjoin actions. The daemon verifies it when you spend - a wallet with
-      no password opens with an empty field.</p>
-    <div class="drow"><button class="abtn" onclick="closeDialog()">Cancel</button>
-      <button class="abtn primary" id="ulGo">Open →</button></div>`);
-  const go = () => activateWallet(name, $("ulPw").value);
-  $("ulGo").onclick = go;
-  $("ulPw").addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
-  $("ulPw").focus();
 }
 
 function showAddWallet() {
@@ -681,6 +707,7 @@ function showPreview(p) {
     if ($("sugDn")) $("sugDn").onclick = () => { chosen = sug.dn; draw(); };
     $("pvConfirm").onclick = async () => {
       const pw = $("pvPw").value;
+      if (pw) S.unlocked[S.wallet] = pw;             // remember for the session
       const pays = [{ sendto: p.addr, amount: chosen ? chosen.sum : p.amt, label: p.lbl }];
       if (chosen) pays[0].subtractFee = true;        // consume the subset to zero: no change
       const coins = (chosen ? chosen.coins : picked)
@@ -758,8 +785,8 @@ async function showCoinjoin() {
       coinjoin is disabled. <a id="cjFix" style="cursor:pointer;text-decoration:underline">Choose
       one in Settings</a>.</span></div>` : ""}
     <div class="fact"><span class="fi">◆</span><span class="fk">Status</span>
-      <span class="fv">${esc(String((S.info && S.info.coinjoinStatus) || "Idle"))}</span></div>
-    <div class="fact"><span class="fi">₿</span><span class="fk">Still non-private</span>
+      <span class="fv">${esc(cjStatusShort())}</span></div>
+    <div class="fact"><span class="fi">₿</span><span class="fk">Left to make private</span>
       <span class="fv">${fmtBtc(np)} BTC</span></div>
     <div class="frow" style="margin-top:16px"><label>WALLET PASSWORD</label>
       <input id="cjPw" type="password" value="${esc(pwOf())}"></div>
@@ -793,6 +820,7 @@ async function showCoinjoin() {
   if ($("cjFix")) $("cjFix").onclick = showSettings;
   $("cjStart").onclick = async () => {
     const auto = document.querySelector('input[name="cjMode"]:checked').value === "auto";
+    if ($("cjPw").value) S.unlocked[S.wallet] = $("cjPw").value;
     try { await rpc("startcoinjoin", [$("cjPw").value, auto, true], S.wallet);
           closeDialog(); toast("coinjoin started ◆"); poll(); }
     catch (e) { toast("✗ " + friendly(e), true, 6000); }
@@ -841,6 +869,7 @@ function showTxFix(kind, tid) {
   $("tfGo").onclick = async () => {
     try {
       $("tfGo").disabled = true;
+      if ($("tfPw").value) S.unlocked[S.wallet] = $("tfPw").value;
       const hx = await rpc(speed ? "speeduptransaction" : "canceltransaction",
                            [tid, $("tfPw").value], S.wallet);
       const r = await rpc("broadcast", [typeof hx === "string" ? hx : String(hx)]);
