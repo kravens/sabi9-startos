@@ -56,15 +56,46 @@ Wasabi "W" breathes green while mixing.
 
 ## Sending bitcoin
 
-1. **Send** - address, amount, and the recipient's name as label.
+1. **Send** - address, amount, and the recipient's name as label. Use
+   **＋ Add recipient** to pay several people in **one transaction** (batched
+   send); each recipient has its own address, amount, and label.
 2. **Preview Transaction** shows the fee and privacy warnings (non-private
-   coins, label interlinking, change creation) plus **Change Avoidance**
-   suggestions: send slightly more or less so the transaction consumes its
-   coins exactly and creates **no change output**. Optional - use it when the
-   receiver accepts a slightly different amount.
+   coins, label interlinking, change creation). For a single recipient it also
+   offers **Change Avoidance** suggestions: send slightly more or less so the
+   transaction consumes its coins exactly and creates **no change output**
+   (optional - use it when the receiver accepts a slightly different amount).
+   **choose coins** on the preview lets you pick exactly which coins fund the
+   send, overriding the automatic private-first selection.
 3. Confirm with your wallet password.
 
 Pending transactions show ⚡ (speed up, RBF/CPFP) and ✕ (cancel) in the history.
+**Click any transaction** for its details, and use the **All / ◆ Coinjoins**
+filter above the list to show only coinjoin transactions.
+
+## Coin control
+
+**⛃ Coins** (top-right) lists every coin in the open wallet with its privacy
+state - a colored dot for **private** (green, at or above your anonymity
+target), **mixing** (amber), or **non-private** (red) - plus its amount, label,
+receive address (click to copy), and confirmations. From here you can:
+
+- **Freeze / Unfreeze** a coin to keep it out of coinjoin (Wasabi's
+  exclude-from-coinjoin). Frozen coins are never mixed and are skipped by the
+  private-first send picker.
+- **Edit labels** inline and **Save** - this writes the labels into the wallet
+  file and restarts the service (Wasabi has no live label-editing RPC).
+
+## Wallet options, backup, and deleting
+
+**⚙ Wallet** (top-right) shows wallet info from the daemon - balance, coin and
+transaction counts, coinjoin status, anonymity target, master fingerprint, and
+the segwit + taproot account xpubs - and holds two actions:
+
+- **Download wallet backup** - the wallet `.json` file (see Backups below).
+- **Delete wallet** - removes the wallet file from the server. It asks you to
+  **download a backup first**, then to **type the wallet name** to confirm;
+  the service restarts to clear the deleted wallet. **Irreversible** without the
+  backup.
 
 ## Cold wallets (ColdCard / SeedSigner, fully offline)
 
@@ -124,7 +155,7 @@ Three layers, strongest first:
    configuration. Reinstall + *Restore from backup* brings everything back
    **exactly and immediately - no re-scan**, because the transaction history is
    part of the snapshot. Use this to move a node or recover after a wipe.
-2. **Wallet file download** - the **⇓ button** next to Send/Receive saves the
+2. **Wallet file download** - **⚙ Wallet → Download wallet backup** saves the
    open wallet's `.json` to your computer. It contains your address labels and
    anonymity scores plus the password-encrypted secret (hot wallets) or just
    the xpub (watch-only) - the same file Wasabi Desktop backs up. Store it

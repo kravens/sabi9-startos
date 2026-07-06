@@ -24,9 +24,20 @@ sibling of [`sabi.py`](https://github.com/kravens/coinjoin.nl/blob/main/scripts/
 ## What the package adds vs upstream
 
 - Web UI (port **55569**, mouse-first, Wasabi Desktop styling): balance /
-  privacy-progress / exchange-rate cards, transaction list, send with
-  **Preview Transaction** (warnings + **Change Avoidance** no-change
-  suggestions), receive with QR, coinjoin "music box" bar, discreet mode.
+  privacy-progress / exchange-rate cards, transaction list with per-tx detail
+  and an All / coinjoins filter, receive with QR, coinjoin "music box" bar
+  (continuous mix, sweep-via-coinjoin, payments-in-coinjoin), discreet mode.
+- **Send**: multi-recipient batched payments, **Preview Transaction** (privacy
+  warnings + single-recipient **Change Avoidance** no-change suggestions), and
+  manual **coin selection** overriding the private-first auto-pick.
+- **Coin control** (⛃ Coins): per-coin anonymity class, freeze/unfreeze
+  (exclude-from-coinjoin), receive address, and inline label editing (writes the
+  wallet-file `HdPubKeys` then restarts - no live label RPC exists).
+- **Wallet options** (⚙): daemon wallet info (fingerprint, xpubs, coinjoin
+  status…), wallet-file backup, and Delete Wallet (backup-first, type-to-confirm,
+  unlink + restart).
+- Polling fires the independent daemon reads in parallel (status, wallet list,
+  coins, history, fee rates, sidebar balances).
 - JSON-RPC enabled automatically on first boot (loopback only), config kept in
   the `main` volume and respected if you edit it.
 - RPC proxy whitelists wallet methods; nothing that could exfiltrate keys.
