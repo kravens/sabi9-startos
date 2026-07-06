@@ -389,6 +389,30 @@ def set_wallet_anon_target(name, value):
     _write_wallet(p, d)
     return v
 
+def set_coin_labels(name, labels):
+    # labels: [{keyPath, label}] - match on HdPubKeys[].FullKeyPath (same string the
+    # RPC returns as a coin's keyPath). No daemon RPC for labels exists, so we edit
+    # the wallet file and restart (the daemon caches HdPubKeys and would overwrite).
+    if not isinstance(labels, list):
+        raise ValueError("labels must be a list")
+    want = {}
+    for it in labels:
+        kp = str((it or {}).get("keyPath") or "").strip()
+        if kp:
+            want[kp] = str(it.get("label") or "")
+    if not want:
+        return 0
+    p = _existing_wallet_path(name)
+    with open(p, encoding="utf-8-sig") as f:
+        d = json.load(f)
+    n = 0
+    for k in d.get("HdPubKeys", []):
+        if k.get("FullKeyPath") in want:
+            k["Label"] = want[k["FullKeyPath"]]
+            n += 1
+    _write_wallet(p, d)
+    return n
+
 def set_wallet_gap_limit(name, value):
     try: v = int(value)
     except (TypeError, ValueError): raise ValueError("gap limit must be a whole number")
@@ -605,6 +629,36 @@ class Handler(BaseHTTPRequestHandler):
             # killed wassabeed and did not reliably bring the service back.)
             _restart_flag["pending"] = True
             return self._send(200, {"ok": True})
+        if path == "/delete-wallet":
+            # unlink the wallet FILE, then request a service restart: the daemon
+            # keeps deleted wallets in memory (still shows in listwallets) and can
+            # rewrite the file on state changes, so a restart is what truly clears
+            # it. Irreversible without the backup - the UI gates on backup + name.
+            try:
+                ln = int(self.headers.get("Content-Length") or 0)
+                req = json.loads(self.rfile.read(min(ln, 100_000)).decode() or "{}")
+                name = str(req.get("name") or "").strip()
+                if not re.fullmatch(WALLET_NAME_RE, name):
+                    return self._send(400, {"error": "bad wallet name"})
+                p = os.path.join(os.path.dirname(WASABI_CFG), "Wallets", name + ".json")
+                if not os.path.isfile(p):
+                    return self._send(404, {"error": f"no wallet file for '{name}'"})
+                os.remove(p)
+                _restart_flag["pending"] = True
+                return self._send(200, {"ok": True, "restartRequired": True})
+            except Exception as e:
+                return self._send(502, {"error": str(e) or type(e).__name__})
+        if path == "/set-labels":
+            try:
+                ln = int(self.headers.get("Content-Length") or 0)
+                req = json.loads(self.rfile.read(min(ln, 1_000_000)).decode() or "{}")
+                n = set_coin_labels(req.get("name"), req.get("labels"))
+                _restart_flag["pending"] = True
+                return self._send(200, {"ok": True, "updated": n, "restartRequired": True})
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except Exception as e:
+                return self._send(502, {"error": str(e) or type(e).__name__})
         if path == "/import-skeleton":
             try:
                 ln = int(self.headers.get("Content-Length") or 0)

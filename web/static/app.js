@@ -10,6 +10,7 @@ const S = {
   walletsKnown: false,      // true once the daemon answered listwallets (drives welcome)
   info: null, coins: [], history: [], fees: null, status: null, balances: {},
   loading: false, cjOn: false, discreet: localStorage.getItem("sabi9.discreet") === "1",
+  txFilter: "all",          // "all" | "cj" - transaction list filter
 };
 
 // ---------- rpc ---------------------------------------------------------------------
@@ -92,8 +93,8 @@ function toast(msg, err = false, ms = 3500) {
 // ---------- polling -----------------------------------------------------------------
 async function poll() {
   try {
-    S.status = await rpc("getstatus");
-    const ws = await rpc("listwallets");
+    const [status, ws] = await Promise.all([rpc("getstatus"), rpc("listwallets")]);
+    S.status = status;
     S.wallets = (ws || []).map((w) => w.walletName || w);
     S.walletsKnown = true;    // daemon is up and answered - welcome/sidebar can decide
     if (S.wallet) {
@@ -108,15 +109,21 @@ async function poll() {
           S.loading = true; S.coins = []; S.history = [];
         } else {
           S.loading = false;
-          S.coins = (await rpc("listunspentcoins", [], S.wallet)) || [];
-          let h = (await rpc("gethistory", [], S.wallet)) || [];
+          // independent reads - fire together (getfeerates keeps its own fallback)
+          const [coins, hist, fees] = await Promise.all([
+            rpc("listunspentcoins", [], S.wallet),
+            rpc("gethistory", [], S.wallet),
+            rpc("getfeerates", [], S.wallet).catch(() => S.fees),
+          ]);
+          S.coins = coins || [];
+          let h = hist || [];
           if (!Array.isArray(h)) h = h.transactions || [];
           h.sort((a, b) => {                       // newest first, unconfirmed pinned
             const ha = parseInt(a.height) || 1 << 30, hb = parseInt(b.height) || 1 << 30;
             return hb - ha || String(b.datetime || "").localeCompare(String(a.datetime || ""));
           });
           S.history = h;
-          try { S.fees = await rpc("getfeerates", [], S.wallet); } catch (e) {}
+          S.fees = fees;
         }
         const cjs = String((S.info && S.info.coinjoinStatus) || "");
         S.cjOn = cjs !== "" && cjs.toLowerCase() !== "idle";
@@ -133,19 +140,15 @@ async function poll() {
     // the daemon sums coins in C#; crash-safe, unlike the Scheme coin query).
     // null = not known yet (loading) -> shown as "…".
     S.balances = S.balances || {};
-    for (const w of S.wallets) {
-      if (w === S.wallet) {
-        S.balances[w] = S.loading ? null
-          : (S.info && typeof S.info.balance === "number" ? S.info.balance
-             : S.coins.reduce((a, c) => a + (c.amount || 0), 0));
-        continue;
-      }
-      try {
-        const wi = await rpc("getwalletinfo", [], w);
-        S.balances[w] = wi && wi.loaded === true && typeof wi.balance === "number"
-          ? wi.balance : null;
-      } catch (e) { S.balances[w] = null; }
-    }
+    S.balances[S.wallet] = S.loading ? null
+      : (S.info && typeof S.info.balance === "number" ? S.info.balance
+         : S.coins.reduce((a, c) => a + (c.amount || 0), 0));
+    const others = S.wallets.filter((w) => w !== S.wallet);
+    const bals = await Promise.all(others.map((w) =>   // all sidebar balances at once
+      rpc("getwalletinfo", [], w)
+        .then((wi) => wi && wi.loaded === true && typeof wi.balance === "number" ? wi.balance : null)
+        .catch(() => null)));
+    others.forEach((w, k) => { S.balances[w] = bals[k]; });
     render();
   } catch (e) {
     $("syncNote").classList.remove("hidden");
@@ -204,7 +207,8 @@ function render() {
   const blocked = S.loading || S.walletMissing;
   $("btnSend").disabled = blocked;
   $("btnReceive").disabled = blocked;
-  $("btnExport").disabled = S.walletMissing;   // file exists while syncing
+  $("btnWalletOpts").disabled = S.walletMissing;   // info/backup work while syncing
+  $("btnCoins").disabled = S.walletMissing || S.loading;   // needs loaded coins
   show("walletLoading", blocked);
   show("dashBody", !blocked);
   $("musicbox").classList.toggle("hidden", blocked);
@@ -253,10 +257,13 @@ function render() {
   $("cRate").innerHTML = xr
     ? `${Math.round(xr).toLocaleString().replace(/,/g, " ")} <span class="btc">USD</span>` : "—";
 
-  // transactions
+  // transactions (with All / Coinjoins filter)
   const tb = $("txBody"); tb.innerHTML = "";
-  $("txCount").textContent = S.history.length ? `(${S.history.length})` : "";
-  for (const h of S.history.slice(0, 200)) {
+  $("txfAll").classList.toggle("on", S.txFilter !== "cj");
+  $("txfCj").classList.toggle("on", S.txFilter === "cj");
+  const shown = S.txFilter === "cj" ? S.history.filter(isCj) : S.history;
+  $("txCount").textContent = shown.length ? `(${shown.length})` : "";
+  for (const h of shown.slice(0, 200)) {
     const tr = document.createElement("tr");
     const amt = h.amount || 0;
     const pending = !parseInt(h.height);
@@ -274,9 +281,8 @@ function render() {
       `<td class="lbl">${cj ? '<span class="chip">coinjoin</span>'
         : (h.label ? `<span class="chip">${esc(String(h.label))}</span>` : "")}</td>` +
       `<td class="conf ${pending ? "unconf" : ""}">${conf}${acts}</td>`;
-    tr.title = h.tx ? "click to copy txid: " + h.tx : "";
-    tr.onclick = () => { navigator.clipboard && navigator.clipboard.writeText(h.tx || "");
-                         toast("txid copied"); };
+    tr.title = "click for transaction details";
+    tr.onclick = () => showTxDetail(h);
     tr.querySelectorAll(".txa").forEach((b) => b.onclick = (ev) => {
       ev.stopPropagation(); showTxFix(b.dataset.a, h.tx);
     });
@@ -619,30 +625,52 @@ function changeless(total) {
 }
 
 function showSend() {
+  const rowHtml = (rm) => `<div class="sendrow">
+    <div class="frow"><label>ADDRESS${rm ? ' <span class="rmrec">✕ remove</span>' : ""}</label>
+      <input class="sAddr" placeholder="bc1q..." spellcheck="false"></div>
+    <div class="inline2">
+      <div class="frow"><label>AMOUNT (BTC)</label><input class="sAmt" placeholder="0.001"></div>
+      <div class="frow"><label>RECIPIENT / LABEL (required)</label><input class="sLbl" placeholder="who receives this?"></div>
+    </div></div>`;
   openDialog(`
     <h2><span class="back" onclick="closeDialog()">←</span> Send</h2>
-    <div class="frow"><label>ADDRESS</label><input id="sAddr" placeholder="bc1q..." spellcheck="false"></div>
-    <div class="frow"><label>AMOUNT (BTC)</label><input id="sAmt" placeholder="0.001"></div>
-    <div class="frow"><label>RECIPIENT / LABEL (required by Wasabi)</label><input id="sLbl" placeholder="who receives this?"></div>
+    <div id="sendRows">${rowHtml(false)}</div>
+    <div class="drow" style="justify-content:flex-start;margin-top:8px">
+      <button class="abtn" id="sAdd">+ Add recipient</button></div>
     <div class="drow"><button class="abtn" onclick="closeDialog()">Cancel</button>
-    <button class="abtn primary" id="sNext">Preview →</button></div>`);
+      <button class="abtn primary" id="sNext">Preview →</button></div>`);
+  const wireRemove = () => $("dialog").querySelectorAll(".rmrec").forEach((x) =>
+    x.onclick = () => { x.closest(".sendrow").remove(); });
+  $("sAdd").onclick = () => {
+    $("sendRows").insertAdjacentHTML("beforeend", rowHtml(true));
+    wireRemove();
+  };
   $("sNext").onclick = () => {
-    const addr = $("sAddr").value.trim();
-    const amt = Math.round(parseFloat($("sAmt").value) * 1e8);
-    const lbl = $("sLbl").value.trim();
-    if (!/^(bc1|tb1|bcrt1|[13mn2])[0-9a-zA-Z]{20,90}$/.test(addr)) return toast("that doesn't look like a bitcoin address", true);
-    if (!amt || amt <= 0) return toast("enter a positive amount", true);
-    if (!lbl) return toast("Wasabi requires a label - who receives this?", true);
-    showPreview({ addr, amt, lbl });
+    const rows = [...$("dialog").querySelectorAll(".sendrow")];
+    const pays = [];
+    for (const r of rows) {
+      const addr = r.querySelector(".sAddr").value.trim();
+      const amt = Math.round(parseFloat(r.querySelector(".sAmt").value) * 1e8);
+      const lbl = r.querySelector(".sLbl").value.trim();
+      if (!/^(bc1|tb1|bcrt1|[13mn2])[0-9a-zA-Z]{20,90}$/.test(addr))
+        return toast("that doesn't look like a bitcoin address", true);
+      if (!amt || amt <= 0) return toast("enter a positive amount", true);
+      if (!lbl) return toast("Wasabi requires a label - who receives each payment?", true);
+      pays.push({ addr, amt, lbl });
+    }
+    if (!pays.length) return toast("add a recipient", true);
+    showPreview(pays);
   };
 }
 
-function showPreview(p) {
+function showPreview(pays) {
   const rate = feeRate();
   const T = target();
-  const sug = changeless(p.amt);
+  const single = pays.length === 1;
+  const totAmt = pays.reduce((a, x) => a + x.amt, 0);
+  const sug = single ? changeless(totAmt) : {};   // change-avoidance only for one recipient
   // default coin selection: private first (mirrors sabi.py pick_coins)
-  const need = p.amt + Math.max(5000, Math.round(p.amt * 0.003));
+  const need = totAmt + Math.max(5000, Math.round(totAmt * 0.003));
   const groups = [
     S.coins.filter((c) => anonOf(c) >= T),
     S.coins.filter((c) => anonOf(c) > 1 && anonOf(c) < T),
@@ -655,12 +683,16 @@ function showPreview(p) {
     }
     if (have >= need) break;
   }
-  const vsize = 11 + 68 * picked.length + 31 * 2;
-  const estFee = Math.round(rate * vsize);
-  const labels = new Set(picked.map((c) => String(c.label || "")).filter(Boolean));
-  const usesNp = picked.some((c) => anonOf(c) <= 1);
-  const toxic = usesNp && picked.some((c) => anonOf(c) >= T);
+  let manual = false, estFee, labels, usesNp, toxic;
   let chosen = null;                                 // no-change selection, if user picks one
+  function recalc() {                                // derive fee + warnings from `picked`
+    const vsize = 11 + 68 * picked.length + 31 * (pays.length + 1);
+    estFee = Math.round(rate * vsize);
+    labels = new Set(picked.map((c) => String(c.label || "")).filter(Boolean));
+    usesNp = picked.some((c) => anonOf(c) <= 1);
+    toxic = usesNp && picked.some((c) => anonOf(c) >= T);
+  }
+  recalc();
 
   const warnChips = () => {
     const w = [];
@@ -676,7 +708,7 @@ function showPreview(p) {
     return w.join("");
   };
   const sugBtns = () => {
-    if (chosen) return "";
+    if (chosen || manual) return "";     // manual coin choice overrides auto-suggestions
     let h = "";
     if (sug.up) h += `<button class="sugbtn up" id="sugUp"><span class="si">▲</span>
       <span><b>Change Avoidance</b><br>Send <b>more</b> by ${sug.up.delta.toLocaleString()} sats
@@ -687,24 +719,68 @@ function showPreview(p) {
     return h ? `<div class="improve">IMPROVE THIS TRANSACTION:</div>${h}` : "";
   };
 
+  // manual coin selection: override the private-first auto-pick
+  function showCoinPicker() {
+    const confirmed = S.coins.filter((c) => c.confirmed !== false)
+      .sort((a, b) => (b.amount || 0) - (a.amount || 0));
+    const key = (c) => c.txid + ":" + c.index;
+    const on = new Set(picked.map(key));
+    const row = (c) => `<label class="coin picksel">
+      <input type="checkbox" data-k="${esc(key(c))}" ${on.has(key(c)) ? "checked" : ""}>
+      <span class="cdot ${coinClass(c)}"></span>
+      <span class="camt">${esc(fmtBtc(c.amount || 0))}</span>
+      <span class="clab">${esc(c.label || "")}</span>
+      <span class="cmeta">anonset ${Math.floor(anonOf(c))}</span></label>`;
+    openDialog(`
+      <h2><span class="back" id="cpBack">←</span> Choose coins</h2>
+      <p class="setp">Selected coins fund this send — must cover amount + fee.
+        Mixing private with non-private coins undoes their privacy.</p>
+      <div class="coinlist">${confirmed.map(row).join("")}</div>
+      <div class="kv"><span id="cpSum"></span><b>need ≈ ${esc(fmtBtc(totAmt))} + fee</b></div>
+      <div class="drow"><button class="abtn" id="cpCancel">Cancel</button>
+        <button class="abtn primary" id="cpApply">Use these coins</button></div>`);
+    const boxes = () => [...$("dialog").querySelectorAll("input[type=checkbox]")];
+    const picks = () => {
+      const s = new Set(boxes().filter((b) => b.checked).map((b) => b.dataset.k));
+      return confirmed.filter((c) => s.has(key(c)));
+    };
+    const upd = () => {
+      const cs = picks(), sum = cs.reduce((a, c) => a + (c.amount || 0), 0);
+      $("cpSum").textContent = `${cs.length} selected · ${fmtBtc(sum)} BTC`;
+    };
+    boxes().forEach((b) => b.onchange = upd); upd();
+    $("cpBack").onclick = $("cpCancel").onclick = draw;
+    $("cpApply").onclick = () => {
+      const cs = picks(), sum = cs.reduce((a, c) => a + (c.amount || 0), 0);
+      if (!cs.length) return toast("select at least one coin", true);
+      if (sum < totAmt + estFee) return toast("coins don't cover amount + fee", true);
+      picked = cs; manual = true; chosen = null; recalc(); draw();
+    };
+  }
+
   const draw = () => {
-    const amt = chosen ? p.amt + chosen.delta : p.amt;
+    const amt = chosen ? totAmt + chosen.delta : totAmt;
     const useCoins = chosen ? chosen.coins : picked;
     const fee = chosen ? Math.max(0, chosen.sum - amt) : estFee;
+    const recipFacts = single
+      ? `<div class="fact"><span class="fi">⇄</span><span class="fk">Address</span>
+            <span class="fv">${esc(pays[0].addr)}</span></div>
+         <div class="fact"><span class="fi">◔</span><span class="fk">Recipient</span>
+            <span class="fv">${esc(pays[0].lbl)}</span></div>`
+      : `<div class="fact"><span class="fi">⇄</span><span class="fk">${pays.length} recipients</span>
+            <span class="fv">${pays.map((x) => `${esc(x.lbl)} · ${fmtBtc(x.amt)}`).join("<br>")}</span></div>`;
     openDialog(`
       <h2><span class="back" id="pvBack">←</span> Preview Transaction</h2>
       <div id="pvGrid">
         <div id="pvFacts">
-          <div class="fact"><span class="fi">₿</span><span class="fk">Amount</span>
+          <div class="fact"><span class="fi">₿</span><span class="fk">Total amount</span>
             <span class="fv">${fmtBtc(amt)} BTC (${fmtUsd(amt)})</span></div>
-          <div class="fact"><span class="fi">⇄</span><span class="fk">Address</span>
-            <span class="fv">${esc(p.addr)}</span></div>
-          <div class="fact"><span class="fi">◔</span><span class="fk">Recipient</span>
-            <span class="fv">${esc(p.lbl)}</span></div>
+          ${recipFacts}
           <div class="fact"><span class="fi">⏲</span><span class="fk">Expected confirmation time</span>
             <span class="fv">≈ 60 minutes (6 blocks)</span></div>
           <div class="fact"><span class="fi">▤</span><span class="fk">Fee${chosen ? "" : " (estimate)"}</span>
-            <span class="fv">${fmtBtc(fee)} BTC (${fmtUsd(fee)}) · ${useCoins.length} coins in</span></div>
+            <span class="fv">${fmtBtc(fee)} BTC (${fmtUsd(fee)}) · ${useCoins.length} coins in
+              ${chosen ? "" : `<button class="linkbtn" id="pvCoins">choose coins</button>`}</span></div>
           <div class="frow" style="margin-top:16px"><label>WALLET PASSWORD</label>
             <input id="pvPw" type="password"></div>
           <div class="drow"><button class="abtn" onclick="closeDialog()">Cancel</button>
@@ -715,15 +791,18 @@ function showPreview(p) {
     $("pvBack").onclick = showSend;
     if ($("sugUp")) $("sugUp").onclick = () => { chosen = sug.up; draw(); };
     if ($("sugDn")) $("sugDn").onclick = () => { chosen = sug.dn; draw(); };
+    if ($("pvCoins")) $("pvCoins").onclick = showCoinPicker;
     $("pvConfirm").onclick = async () => {
       const pw = $("pvPw").value;
-      const pays = [{ sendto: p.addr, amount: chosen ? chosen.sum : p.amt, label: p.lbl }];
-      if (chosen) pays[0].subtractFee = true;        // consume the subset to zero: no change
+      const payments = pays.map((x) => ({ sendto: x.addr, amount: x.amt, label: x.lbl }));
+      if (chosen) {              // single-recipient change-avoidance: consume the subset exactly
+        payments[0].amount = chosen.sum; payments[0].subtractFee = true;
+      }
       const coins = (chosen ? chosen.coins : picked)
         .map((c) => ({ transactionid: c.txid, index: c.index }));
       try {
         $("pvConfirm").disabled = true;
-        const r = await rpc("send", { payments: pays, coins, feeTarget: 6, password: pw }, S.wallet);
+        const r = await rpc("send", { payments, coins, feeTarget: 6, password: pw }, S.wallet);
         closeDialog(); toast("sent ✓  txid " + String((r && r.txid) || "").slice(0, 16) + "…");
         poll();
       } catch (e) { toast("✗ " + friendly(e), true, 6000); $("pvConfirm").disabled = false; }
@@ -1079,24 +1158,201 @@ async function showSettings(tab = "coordinator") {
 // ---------- wire up -----------------------------------------------------------------------
 $("btnSend").onclick = showSend;
 $("btnReceive").onclick = showReceive;
+$("btnWalletOpts").onclick = showWalletOptions;
+$("btnCoins").onclick = showCoins;
+$("txfAll").onclick = () => { S.txFilter = "all"; render(); };
+$("txfCj").onclick = () => { S.txFilter = "cj"; render(); };
+
 // wallet-file backup: the only backup that keeps labels + anonymity metadata.
 // (Uninstalling the service DELETES the data volume - see instructions.)
-$("btnExport").onclick = () => {
-  if (!S.wallet) return;
+function downloadWalletFile(name) {
   const a = document.createElement("a");
   if (DEMO) {
     const blob = new Blob(
-      [JSON.stringify({ demo: true, walletName: S.wallet, HdPubKeys: [] }, null, 2)],
+      [JSON.stringify({ demo: true, walletName: name, HdPubKeys: [] }, null, 2)],
       { type: "application/json" });
     a.href = URL.createObjectURL(blob);
   } else {
-    a.href = "/export-wallet?name=" + encodeURIComponent(S.wallet);
+    a.href = "/export-wallet?name=" + encodeURIComponent(name);
   }
-  a.download = S.wallet + ".json";
+  a.download = name + ".json";
   document.body.appendChild(a); a.click(); a.remove();
   if (DEMO) URL.revokeObjectURL(a.href);
   toast("⇓ wallet file downloading - it holds your labels and (encrypted) keys, store it like cash");
-};
+}
+
+// coin privacy class: private (>= target) / mixing (1 < a < target) / non-private (<= 1)
+function coinClass(c) {
+  const a = anonOf(c);
+  return a >= target() ? "priv" : a > 1 ? "mix" : "nonpriv";
+}
+const COIN_LABEL = { priv: "private", mix: "mixing", nonpriv: "non-private" };
+
+// coin control: per-coin anonymity + freeze/unfreeze from coinjoin
+// (excludefromcoinjoin). Read-only data comes from the poll's listunspentcoins.
+function showCoins() {
+  if (!S.wallet) return;
+  const coins = [...S.coins].sort((a, b) => (b.amount || 0) - (a.amount || 0));
+  const sum = (f) => coins.filter(f).reduce((a, c) => a + (c.amount || 0), 0);
+  const priv = sum((c) => coinClass(c) === "priv");
+  const tot = sum(() => true);
+  const row = (c) => {
+    const cls = coinClass(c), frozen = !!c.excludedFromCoinjoin;
+    const conf = c.confirmed === false ? "unconfirmed" : `${c.confirmations ?? 0} conf`;
+    return `<div class="coin ${frozen ? "frozen" : ""}">
+      <span class="cdot ${cls}" title="${COIN_LABEL[cls]} · anonset ${Math.floor(anonOf(c))}"></span>
+      <span class="camt">${esc(fmtBtc(c.amount || 0))}</span>
+      <input class="clabedit" data-kp="${esc(c.keyPath || "")}" data-orig="${esc(c.label || "")}"
+        value="${esc(c.label || "")}" placeholder="label" spellcheck="false"
+        ${c.keyPath ? "" : "disabled"}>
+      <span class="caddr mono copy" data-x="${esc(c.address || "")}"
+        title="click to copy address">${esc(shortId(c.address || "", 10))}</span>
+      <span class="cmeta">${conf}${frozen ? " · ❄" : ""}</span>
+      <button class="abtn cfreeze" data-tx="${esc(c.txid)}" data-ix="${c.index}" data-ex="${frozen ? 0 : 1}"
+        >${frozen ? "Unfreeze" : "❄ Freeze"}</button>
+    </div>`;
+  };
+  openDialog(`
+    <h2><span class="back" onclick="closeDialog()">←</span> Coins — '${esc(S.wallet)}'</h2>
+    <div class="kv"><span>${coins.length} coins · ${esc(fmtBtc(tot))} BTC</span>
+      <b>${esc(fmtBtc(priv))} private (${tot ? Math.round(100 * priv / tot) : 0}%)</b></div>
+    <p class="setp">Freeze a coin to keep it out of coinjoin (Wasabi's exclude-from-coinjoin).
+      Edit a label and Save to rename coins/addresses — saving restarts the service (Wasabi
+      has no live label RPC).</p>
+    <div class="coinlist">${coins.length ? coins.map(row).join("") : '<p class="setp">No coins yet.</p>'}</div>
+    <div class="drow"><button class="abtn primary" id="cSaveLabels" disabled>Save labels (restarts)</button></div>`);
+  const inputs = () => [...$("dialog").querySelectorAll(".clabedit")];
+  const changed = () => inputs().filter((i) => i.value !== i.dataset.orig && i.dataset.kp);
+  const save = $("cSaveLabels");
+  const refresh = () => { save.disabled = changed().length === 0; };
+  inputs().forEach((i) => i.oninput = refresh);
+  $("dialog").querySelectorAll(".copy").forEach((el) => {
+    el.onclick = () => {
+      navigator.clipboard && navigator.clipboard.writeText(el.dataset.x || "");
+      toast("address copied ✓");
+    };
+  });
+  $("dialog").querySelectorAll(".cfreeze").forEach((b) => {
+    b.onclick = async () => {
+      b.disabled = true;
+      try {
+        await rpc("excludefromcoinjoin",
+          [b.dataset.tx, Number(b.dataset.ix), b.dataset.ex === "1"], S.wallet);
+        toast(b.dataset.ex === "1" ? "coin frozen ❄" : "coin unfrozen");
+        await poll(); showCoins();          // refresh state + dialog
+      } catch (e) { toast("✗ " + friendly(e), true); b.disabled = false; }
+    };
+  });
+  save.onclick = async () => {
+    const labels = changed().map((i) => ({ keyPath: i.dataset.kp, label: i.value }));
+    save.disabled = true;
+    try {
+      await api("/set-labels", { name: S.wallet, labels });
+      closeDialog();
+      toast(`${labels.length} label(s) saved — service restarting`);
+      poll();
+    } catch (e) { toast("✗ " + friendly(e), true); save.disabled = false; }
+  };
+}
+
+// transaction detail: what gethistory gives us (no external explorer - privacy).
+function showTxDetail(h) {
+  const amt = h.amount || 0, pending = !parseInt(h.height), cj = isCj(h);
+  const kv = (k, v) => `<div class="kv"><span>${esc(k)}</span><b>${v}</b></div>`;
+  openDialog(`
+    <h2><span class="back" onclick="closeDialog()">←</span> Transaction</h2>
+    ${kv("Amount", `${amt > 0 ? "+" : ""}${esc(fmtBtc(amt))} BTC`)}
+    ${kv("Fiat", esc(fmtUsd(Math.abs(amt))) || "—")}
+    ${kv("Date", esc(fmtDate(h.datetime)) || "—")}
+    ${kv("Status", pending ? "pending (unconfirmed)"
+      : `confirmed · block ${parseInt(h.height).toLocaleString()}`)}
+    ${kv("Type", cj ? "◆ coinjoin" : amt > 0 ? "received" : "sent")}
+    ${h.label && !cj ? kv("Label", esc(String(h.label))) : ""}
+    ${h.tx ? '<div class="improve">TXID</div>'
+      + `<div class="mono copy" data-x="${esc(h.tx)}" title="click to copy"
+           style="word-break:break-all;cursor:pointer">${esc(h.tx)}</div>` : ""}`);
+  $("dialog").querySelectorAll(".copy").forEach((el) => {
+    el.onclick = () => {
+      navigator.clipboard && navigator.clipboard.writeText(el.dataset.x || "");
+      toast("txid copied ✓");
+    };
+  });
+}
+
+// wallet options: info from getwalletinfo (+ polled coins/history), backup, delete
+function showWalletOptions() {
+  if (!S.wallet) return;
+  const i = S.info || {};
+  const priv = S.coins.filter((c) => anonOf(c) >= target()).length;
+  const bal = typeof i.balance === "number"
+    ? i.balance : S.coins.reduce((a, c) => a + (c.amount || 0), 0);
+  const wo = !!i.isWatchOnly, hw = !!i.isHardwareWallet;
+  const kv = (k, v) => `<div class="kv"><span>${esc(k)}</span><b>${v}</b></div>`;
+  const acct = (a) => `<div class="kv"><span>${esc(a.name)} · ${esc(a.keyPath || "")}</span>`
+    + `<b class="mono copy" title="click to copy xpub" data-x="${esc(a.publicKey || "")}">`
+    + `${esc(shortId(a.publicKey, 14))}</b></div>`;
+  openDialog(`
+    <h2><span class="back" onclick="closeDialog()">←</span> Wallet '${esc(S.wallet)}'
+      ${wo ? '<span class="wobadge">◇ watch-only</span>' : ""}${hw ? '<span class="wobadge">⌘ hardware</span>' : ""}</h2>
+    <div class="improve">INFO</div>
+    ${kv("Balance", esc(fmtBtc(bal)) + " BTC")}
+    ${kv("Coins", `${S.coins.length} (${priv} private)`)}
+    ${kv("Transactions", String(S.history.length))}
+    ${kv("Coinjoin", esc(cjStatusShort()))}
+    ${kv("Auto-coinjoin", i.isAutoCoinjoin ? "on" : "off")}
+    ${kv("Anonymity target", String(target()))}
+    ${kv("Non-private coin isolation", i.isNonPrivateCoinIsolation ? "on" : "off")}
+    ${i.masterKeyFingerprint ? kv("Master fingerprint", `<span class="mono">${esc(i.masterKeyFingerprint)}</span>`) : ""}
+    ${Array.isArray(i.accounts) && i.accounts.length
+      ? '<div class="improve">ACCOUNTS</div>' + i.accounts.map(acct).join("") : ""}
+    <div class="improve">BACKUP</div>
+    <p class="setp">Wallet-file backup keeps labels + privacy metadata (recovery words alone
+      restore only funds). Uninstalling the service deletes everything.</p>
+    <div class="drow"><button class="abtn" id="woBackup">⇓ Download wallet backup</button></div>
+    <div class="improve">DANGER</div>
+    <div class="drow"><button class="abtn danger" id="woDelete">Delete wallet…</button></div>`);
+  $("woBackup").onclick = () => downloadWalletFile(S.wallet);
+  $("woDelete").onclick = () => showDeleteWallet(S.wallet);
+  $("dialog").querySelectorAll(".copy").forEach((el) => {
+    el.onclick = () => {
+      navigator.clipboard && navigator.clipboard.writeText(el.dataset.x || "");
+      toast("xpub copied ✓");
+    };
+  });
+}
+
+// delete wallet: backup-first, then type-the-name to confirm. Deleting unlinks
+// the file and restarts the service (the daemon caches loaded wallets).
+function showDeleteWallet(name) {
+  let backed = false;
+  openDialog(`
+    <h2><span class="back" onclick="showWalletOptions()">←</span> Delete '${esc(name)}'</h2>
+    <p class="setp">⚠ Permanently removes the wallet file from the server. <b>Irreversible</b> —
+      restore is only possible from a backup. The service restarts after deleting.</p>
+    <div class="dwstep"><b>1.</b> <button class="abtn" id="dwBackup">⇓ Download backup first</button>
+      <span id="dwBackOk" class="setp" style="margin:0"></span></div>
+    <div class="dwstep"><b>2.</b> Type the wallet name to confirm:</div>
+    <div class="frow"><input id="dwName" placeholder="${esc(name)}" spellcheck="false" autocomplete="off"></div>
+    <div class="drow"><button class="abtn" onclick="showWalletOptions()">Cancel</button>
+      <button class="abtn danger" id="dwGo" disabled>Delete wallet</button></div>`);
+  const go = $("dwGo"), nm = $("dwName");
+  const refresh = () => { go.disabled = !(backed && nm.value.trim() === name); };
+  $("dwBackup").onclick = () => {
+    downloadWalletFile(name); backed = true;
+    $("dwBackOk").textContent = "✓ backed up"; refresh();
+  };
+  nm.oninput = refresh;
+  go.onclick = async () => {
+    go.disabled = true;
+    try {
+      await api("/delete-wallet", { name });
+      closeDialog();
+      if (S.wallet === name) { S.wallet = null; localStorage.removeItem("sabi9.wallet"); }
+      toast(`wallet '${name}' deleted — service restarting`);
+      poll();
+    } catch (e) { toast("✗ " + friendly(e), true); go.disabled = false; }
+  };
+}
 $("wCreate").onclick = showCreateWallet;
 $("wRecover").onclick = showRecoverWallet;
 $("wImport").onclick = showImportWallet;
@@ -1186,6 +1442,7 @@ function demoRpc(method, params, wallet) {
     getfeerates: { 2: 12, 6: 7, 144: 1 },
     getnewaddress: { address: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4" },
     loadwallet: null, startcoinjoin: null, stopcoinjoin: null, startcoinjoinsweep: null,
+    excludefromcoinjoin: null,
     send: { txid: "d".repeat(64) },
     broadcast: { txid: "e".repeat(64) },
     speeduptransaction: "02000000" + "ab".repeat(60),
@@ -1210,6 +1467,13 @@ function demoApi(path, body) {
   });
   if (path === "/detect-bitcoind") return Promise.resolve({ found: ["bitcoind.embassy:8332"] });
   if (path === "/restart-daemon") return Promise.resolve({ ok: true });
+  if (path === "/delete-wallet") {
+    const i = DEMO_WALLETS.indexOf(body.name);
+    if (i >= 0) DEMO_WALLETS.splice(i, 1);
+    return Promise.resolve({ ok: true, restartRequired: true });
+  }
+  if (path === "/set-labels")
+    return Promise.resolve({ ok: true, updated: (body.labels || []).length, restartRequired: true });
   if (path.startsWith("/wallet-settings")) {
     if (body !== undefined) {
       const res = { ok: true, restartRequired: true };

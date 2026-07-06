@@ -69,8 +69,10 @@
       <span class="grow"></span>
       <button class="abtn primary" id="btnSend">⇱ Send</button>
       <button class="abtn" id="btnReceive">⇲ Receive</button>
-      <button class="abtn" id="btnExport"
-        title="Download this wallet's file - the full backup incl. labels and privacy metadata">⇓</button>
+      <button class="abtn" id="btnCoins"
+        title="Coin control - freeze coins, see anonymity per coin">⛃ Coins</button>
+      <button class="abtn" id="btnWalletOpts"
+        title="Wallet info, backup, and delete">⚙ Wallet</button>
     </div>
 
     <div id="walletLoading" class="hidden">
@@ -108,7 +110,10 @@
       </div>
     </section>
 
-    <div id="txhead"><h3>Transactions</h3><span class="cnt" id="txCount"></span></div>
+    <div id="txhead"><h3>Transactions</h3><span class="cnt" id="txCount"></span>
+      <span class="grow"></span>
+      <button class="txfilt" id="txfAll" data-f="all">All</button>
+      <button class="txfilt" id="txfCj" data-f="cj">◆ Coinjoins</button></div>
     <table id="txs"><tbody id="txBody"></tbody></table>
     </div><!-- /dashBody -->
     </div><!-- /dashboard -->
