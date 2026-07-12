@@ -1,9 +1,10 @@
 import { VersionInfo, IMPOSSIBLE } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2.8.0:17',
+  version: '2.8.0:18',
   releaseNotes: {
     en_US:
+      'v1.0 - first stable release, end-to-end tested on mainnet (no longer alpha).\n\n' +
       'Batched payments: Send now takes multiple recipients in one transaction ' +
       '(+ Add recipient). Change-avoidance suggestions apply to single-recipient sends; ' +
       'manual coin selection works for both.\n\n' +

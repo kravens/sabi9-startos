@@ -1,8 +1,7 @@
-# Sabi9 · Wasabi Wallet for StartOS — ⚠️ ALPHA (pre-release)
+# Sabi9 · Wasabi Wallet for StartOS
 
-> **Alpha / pre-release.** Under active development and not yet audited or
-> submitted to the community registry. Test on a throwaway/regtest wallet or
-> small amounts only. Expect breaking changes.
+> **v1.0 — stable.** End-to-end tested on mainnet. As with any Bitcoin wallet,
+> keep your recovery words backed up on paper.
 
 
 <img width="1346" height="846" alt="image" src="https://github.com/user-attachments/assets/04079b3c-db95-4dac-82f7-3d47521fc28f" />
