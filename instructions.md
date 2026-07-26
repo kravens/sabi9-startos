@@ -1,6 +1,6 @@
 # Sabi9
 
-Wasabi Wallet on your own node: the headless Wasabi daemon (v2.8.0) plus a web
+Wasabi Wallet on your own node: the headless Wasabi daemon (v2.8.1) plus a web
 interface styled after Wasabi Desktop. This page mirrors Wasabi's own
 [ELI5 guide](https://docs.wasabiwallet.io/using-wasabi/ELI5.html) - everything
 there applies here, only "installing Wasabi" is replaced by installing this

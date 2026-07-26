@@ -1,9 +1,11 @@
 import { VersionInfo, IMPOSSIBLE } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2.8.0:18',
+  version: '2.8.1:0',
   releaseNotes: {
     en_US:
+      'Bundles Wasabi Wallet daemon 2.8.1 (was 2.8.0). In-place update - filters and ' +
+      'wallets are preserved.\n\n' +
       'v1.0 - first stable release, end-to-end tested on mainnet (no longer alpha).\n\n' +
       'Batched payments: Send now takes multiple recipients in one transaction ' +
       '(+ Add recipient). Change-avoidance suggestions apply to single-recipient sends; ' +

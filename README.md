@@ -7,7 +7,7 @@
 <img width="1346" height="846" alt="image" src="https://github.com/user-attachments/assets/04079b3c-db95-4dac-82f7-3d47521fc28f" />
 
 
-Wraps the headless **Wasabi Wallet daemon 2.8.0** for StartOS 0.4.0 and adds
+Wraps the headless **Wasabi Wallet daemon 2.8.1** for StartOS 0.4.0 and adds
 **Sabi9**, a web-native interface styled after Wasabi Desktop - the browser
 sibling of [`sabi.py`](https://github.com/kravens/coinjoin.nl/blob/main/scripts/sabi.py).
 
@@ -84,7 +84,7 @@ Distribute the resulting `.s9pk` for sideloading (**System → Sideload** in
 StartOS), or publish it to a community registry with the included GitHub
 Actions workflows (`.github/workflows/`, which delegate to Start9's reusable
 CI). The Docker image downloads the official self-contained Wasabi release
-(`Wasabi-2.8.0-linux-{x64,arm64}.tar.gz`) at build time — see `UPDATING.md`
+(`Wasabi-2.8.1-linux-{x64,arm64}.tar.gz`) at build time — see `UPDATING.md`
 for bumping the version.
 
 CI is active but needs repo config to go green: secret `DEV_KEY` (the

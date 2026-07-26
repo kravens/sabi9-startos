@@ -1,7 +1,7 @@
-# Sabi9: Wasabi Wallet daemon 2.8.0 + web UI, one image, two daemons (see startos/main.ts)
+# Sabi9: Wasabi Wallet daemon 2.8.1 + web UI, one image, two daemons (see startos/main.ts)
 FROM debian:bookworm-slim
 
-ARG WASABI_VERSION=2.8.0
+ARG WASABI_VERSION=2.8.1
 ARG TARGETARCH
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
