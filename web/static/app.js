@@ -693,6 +693,14 @@ function showPreview(pays) {
     toxic = usesNp && picked.some((c) => anonOf(c) >= T);
   }
   recalc();
+  // Fallback: no near-exact subset found, but the auto-picked coins still create
+  // change. Offer the always-available option Wasabi Desktop shows - raise the
+  // payment to absorb the change into the recipient, so no change output is made.
+  // ponytail: cap at 1x amount; if change dwarfs the payment, choosing fewer coins is the fix.
+  if (single && !sug.up) {
+    const delta = have - estFee - totAmt;
+    if (delta > 546 && delta <= totAmt) sug.up = { delta, sum: have, coins: picked };
+  }
 
   const warnChips = () => {
     const w = [];
